@@ -1,13 +1,18 @@
 # atelierkit · api
 
-家用局域网服务器上的个人工具集合 —— 后端服务。
+家用局域网服务器上的个人工具集合 —— 后端服务（**Monorepo**）。
 
-基于 [NestJS](https://nestjs.com) 构建，为 `atelierkit` 各前端应用提供统一的 REST API。
+基于 [NestJS](https://nestjs.com) 构建，为 `atelierkit` 各前端应用提供统一的 REST API，
+并以 **NestJS 标准 Monorepo** 组织两类服务：API 接口服务 + 后台常驻服务。
 
 ## 项目简介
 
 `atelierkit` 是一套部署在家庭局域网服务器上的自托管工具集合，所有数据仅在内网流转。
-`api` 是其中的后端服务，承载数据存取、任务调度与统一鉴权。
+本仓库承载两类后端进程：
+
+- **`apps/api`** —— HTTP 接口服务，承载数据存取、统一鉴权，为前端提供 REST API。
+- **`apps/worker`** —— 后台常驻服务，不监听端口，用于定时任务、队列消费、长时异步任务（如下载引擎管理）。
+- **`libs/`** —— 可复用 NestJS 库（当前为空，待两服务出现共享代码时拆分）。
 
 ## 功能
 
@@ -28,12 +33,20 @@
 # 安装依赖
 yarn install
 
-# 开发模式（热重载）
+# 开发模式（api 热重载）
 yarn start:dev
 
-# 生产构建与运行
+# worker 常驻服务（开发 / 生产）
+yarn start:worker:dev
+yarn start:worker:prod
+
+# 生产构建与运行（api）
 yarn build
 yarn start:prod
+
+# 分别构建
+yarn build:api
+yarn build:worker
 ```
 
 ## 测试
@@ -52,12 +65,18 @@ yarn test:cov
 ## 目录结构
 
 ```
-src/
-├── app.module.ts
-├── app.controller.ts
-├── app.service.ts
-└── main.ts
+apps/
+├── api/                     # HTTP 接口服务
+│   ├── src/  → 已合并到 apps/api 根（main.ts / app.module.ts / ...）
+│   └── test/                # e2e 测试
+└── worker/                  # 后台常驻服务（定时任务 / 队列消费）
+    ├── main.ts
+    └── worker.module.ts
+libs/                        # 可复用 NestJS 库（nest g library <name>）
 ```
+
+> 目录结构说明：Monorepo 下 `apps/api` 的源码直接位于其根目录（`apps/api/*.ts`），
+> 不再有内层 `src/`；`apps/api/test/` 存放 e2e 测试。
 
 ## License
 

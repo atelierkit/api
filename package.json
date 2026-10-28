@@ -1,10 +1,10 @@
 {
   "name": "api",
   "version": "0.0.1",
-  "description": "",
-  "author": "",
+  "description": "家用局域网服务器上的个人工具集合 —— 后端服务。",
+  "author": "atelierkit contributors",
   "private": true,
-  "license": "UNLICENSED",
+  "license": "MIT",
   "type": "module",
   "scripts": {
     "build": "nest build",

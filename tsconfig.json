@@ -16,7 +16,11 @@
     "skipLibCheck": true,
     "strict": true,
     "strictPropertyInitialization": false,
-    "types": ["vitest/globals", "node"]
+    "types": ["vitest/globals", "node"],
+    "paths": {
+      "@shared": ["./apps/api/shared/index.ts"],
+      "@shared/*": ["./apps/api/shared/*"]
+    }
   },
   "references": [
     { "path": "./apps/api/tsconfig.app.json" },

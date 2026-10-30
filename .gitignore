@@ -18,6 +18,10 @@ lerna-debug.log*
 # OS
 .DS_Store
 
+# Package registry (personal mirror, not to be shared)
+.npmrc
+.yarnrc
+
 # Tests
 /coverage
 /.nyc_output

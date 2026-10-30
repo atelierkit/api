@@ -629,4 +629,206 @@ describe('UserService', () => {
       expect(redis.incr).toHaveBeenCalledWith('limit:ip:check:1.2.3.4');
     });
   });
+
+  describe('setValid', () => {
+    it('档位不在白名单时 400，且不查库', async () => {
+      /** 被测服务与替身 */
+      const { service, repository } = serviceOf();
+      await expect(service.setValid(1, 15)).rejects.toBeInstanceOf(
+        BadRequestException,
+      );
+      expect(repository.findOne).not.toHaveBeenCalled();
+    });
+
+    it('用户不存在时 404', async () => {
+      /** 被测服务与替身 */
+      const { service } = serviceOf();
+      await expect(service.setValid(1, 60)).rejects.toBeInstanceOf(
+        NotFoundException,
+      );
+    });
+
+    it('设置成功：记操作序号、写库并排队补日志', async () => {
+      /** 被测服务与替身 */
+      const { service, repository, operate, queue } = serviceOf();
+      repository.findOne.mockResolvedValue({ id: 1, tokenValid: 1440 });
+      expect(await service.setValid(1, 60, 88)).toBe(60);
+      expect(operate.create).toHaveBeenCalledWith('user', 'valid', 1);
+      /** 更新数据 */
+      const value = repository.update.mock.calls[0][1] as Record<
+        string,
+        unknown
+      >;
+      expect(value.tokenValid).toBe(60);
+      expect(queue.addTask).toHaveBeenCalled();
+    });
+
+    it('影响行数为 0 时 422', async () => {
+      /** 被测服务与替身 */
+      const { service, repository } = serviceOf();
+      repository.findOne.mockResolvedValue({ id: 1, tokenValid: 1440 });
+      repository.update.mockResolvedValue({ affected: 0 });
+      await expect(service.setValid(1, 60)).rejects.toThrow(
+        '令牌有效期设置失败！',
+      );
+    });
+  });
+
+  describe('email', () => {
+    it('用户不存在时 404', async () => {
+      /** 被测服务与替身 */
+      const { service } = serviceOf();
+      await expect(service.email(1, 'a@b.com')).rejects.toBeInstanceOf(
+        NotFoundException,
+      );
+    });
+
+    it('邮箱未变化时 422', async () => {
+      /** 被测服务与替身 */
+      const { service, repository } = serviceOf();
+      repository.findOne.mockResolvedValue({
+        id: 1,
+        username: 'admin',
+        status: true,
+        email: 'a@b.com',
+      });
+      await expect(service.email(1, ' A@B.com ')).rejects.toThrow(
+        '邮箱并未发生变化，无需修改！',
+      );
+    });
+
+    it('邮箱已被占用时 409', async () => {
+      /** 被测服务与替身 */
+      const { service, repository } = serviceOf();
+      repository.findOne.mockResolvedValue({
+        id: 1,
+        username: 'admin',
+        status: true,
+        email: 'old@b.com',
+      });
+      repository.existsBy.mockResolvedValue(true);
+      await expect(service.email(1, 'new@b.com')).rejects.toBeInstanceOf(
+        ConflictException,
+      );
+    });
+
+    it('成功时生成激活码并发送含激活链接的邮件', async () => {
+      process.env.WEB_URL = 'http://web/';
+      /** 被测服务与替身 */
+      const { service, repository, redis, email } = serviceOf();
+      repository.findOne.mockResolvedValue({
+        id: 1,
+        username: 'admin',
+        status: true,
+        email: 'old@b.com',
+      });
+      redis.addCode.mockResolvedValue({ code: 'CODE123' });
+      expect(await service.email(1, ' New@B.com ')).toBe(1);
+      // 激活码缓存 30 分钟，携带用户ID与目标邮箱
+      expect(redis.addCode).toHaveBeenCalledWith('activate', 100, 30, {
+        id: 1,
+        email: 'new@b.com',
+      });
+      /** 邮件内容 */
+      const mail = email.send.mock.calls[0][0] as { to: string; html: string };
+      expect(mail.to).toBe('new@b.com');
+      expect(mail.html).toContain('http://web/passport/activate/CODE123');
+      delete process.env.WEB_URL;
+    });
+
+    it('同一 IP 超过每分钟上限时 429', async () => {
+      /** 被测服务与替身 */
+      const { service, redis } = serviceOf();
+      redis.incr.mockResolvedValue(4);
+      redis.ttl.mockResolvedValue(20);
+      /** 捕获的异常 */
+      const error = await service
+        .email(1, 'a@b.com', '1.2.3.4')
+        .catch((err: unknown) => err);
+      expect(error).toBeInstanceOf(RetryAfterException);
+      expect(redis.incr).toHaveBeenCalledWith('limit:ip:email:1.2.3.4');
+    });
+  });
+
+  describe('activate', () => {
+    it('激活码不存在或已过期时 404', async () => {
+      /** 被测服务与替身 */
+      const { service } = serviceOf();
+      await expect(service.activate('CODE')).rejects.toThrow(
+        '激活地址已过期！',
+      );
+    });
+
+    it('用户不存在时 404，被禁用时 401', async () => {
+      /** 被测服务与替身 */
+      const { service, redis, repository } = serviceOf();
+      redis.hgetall.mockResolvedValue({ id: '1', email: 'a@b.com' });
+      await expect(service.activate('CODE')).rejects.toBeInstanceOf(
+        NotFoundException,
+      );
+
+      repository.findOne.mockResolvedValue({
+        id: 1,
+        email: null,
+        status: false,
+        roles: [],
+      });
+      await expect(service.activate('CODE')).rejects.toBeInstanceOf(
+        UnauthorizedException,
+      );
+    });
+
+    it('目标邮箱已被他人占用时 409', async () => {
+      /** 被测服务与替身 */
+      const { service, redis, repository } = serviceOf();
+      redis.hgetall.mockResolvedValue({ id: '1', email: 'a@b.com' });
+      repository.findOne.mockResolvedValue({
+        id: 1,
+        email: null,
+        status: true,
+        roles: [],
+      });
+      repository.existsBy.mockResolvedValue(true);
+      await expect(service.activate('CODE')).rejects.toBeInstanceOf(
+        ConflictException,
+      );
+    });
+
+    it('成功时写入新邮箱、删除激活码并返回提示', async () => {
+      /** 被测服务与替身 */
+      const { service, redis, repository } = serviceOf();
+      redis.hgetall.mockResolvedValue({ id: '1', email: 'a@b.com' });
+      repository.findOne.mockResolvedValue({
+        id: 1,
+        email: null,
+        status: true,
+        roles: [],
+      });
+      /** 响应报文 */
+      const result = await service.activate('CODE', 88);
+      expect(result.msg).toContain('a@b.com');
+      /** 更新数据 */
+      const value = repository.update.mock.calls[0][1] as Record<
+        string,
+        unknown
+      >;
+      expect(value.email).toBe('a@b.com');
+      expect(redis.del).toHaveBeenCalledWith('activate:CODE');
+    });
+  });
+
+  describe('session', () => {
+    it('只更新最后会话时间，不写操作序号', async () => {
+      /** 被测服务与替身 */
+      const { service, repository, operate } = serviceOf();
+      await service.session(1);
+      /** 更新数据 */
+      const value = repository.update.mock.calls[0][1] as Record<
+        string,
+        unknown
+      >;
+      expect(typeof value.lastSessionAt).toBe('number');
+      expect(operate.create).not.toHaveBeenCalled();
+    });
+  });
 });

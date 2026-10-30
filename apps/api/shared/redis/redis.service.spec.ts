@@ -1,5 +1,6 @@
 // 外部依赖
-import { describe, expect, it, vi } from 'vitest';
+import { Logger } from '@nestjs/common';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 // 内部依赖
 import { RedisService } from './redis.service.js';
 
@@ -17,7 +18,12 @@ function serviceOf(overrides: Record<string, unknown>) {
     string,
     unknown
   >;
-  return Object.assign(service, overrides) as unknown as RedisService & {
+  // 注：logger 是字段初始化出来的，绕过构造函数后需要手动补上
+  return Object.assign(
+    service,
+    { logger: new Logger(RedisService.name) },
+    overrides,
+  ) as unknown as RedisService & {
     exists: ReturnType<typeof vi.fn>;
     hmset: ReturnType<typeof vi.fn>;
     pexpireat: ReturnType<typeof vi.fn>;
@@ -105,6 +111,84 @@ describe('RedisService', () => {
         'COUNT',
         100,
       );
+    });
+  });
+
+  describe('构造函数校验', () => {
+    it('未配置缓存地址时直接抛错，避免应用带病启动', () => {
+      /** 原缓存地址 */
+      const host = process.env.REDIS_HOST;
+      delete process.env.REDIS_HOST;
+      expect(() => new RedisService()).toThrow('未配置缓存地址');
+      if (host) {
+        process.env.REDIS_HOST = host;
+      }
+    });
+  });
+
+  describe('onApplicationBootstrap', () => {
+    afterEach(() => {
+      delete process.env.REDIS_INIT;
+      delete process.env.REDIS_DB;
+      delete process.env.BULL_DB;
+      vi.restoreAllMocks();
+    });
+
+    it('未开启 REDIS_INIT 时不动缓存', async () => {
+      vi.spyOn(Logger.prototype, 'debug').mockImplementation(() => undefined);
+      /** 缓存服务替身 */
+      const service = serviceOf({
+        flushdb: vi.fn(async () => 'OK'),
+        duplicate: vi.fn(),
+      }) as unknown as RedisService & { flushdb: ReturnType<typeof vi.fn> };
+      await service.onApplicationBootstrap();
+      expect(service.flushdb).not.toHaveBeenCalled();
+    });
+
+    it('开启后清空应用库，并对独立的 Bull 库单独清理再断开', async () => {
+      vi.spyOn(Logger.prototype, 'debug').mockImplementation(() => undefined);
+      process.env.REDIS_INIT = 'true';
+      process.env.REDIS_DB = '0';
+      process.env.BULL_DB = '1';
+      /** Bull 库连接替身 */
+      const bullClient = {
+        flushdb: vi.fn(async () => 'OK'),
+        quit: vi.fn(async () => 'OK'),
+      };
+      /** 缓存服务替身 */
+      const service = serviceOf({
+        flushdb: vi.fn(async () => 'OK'),
+        duplicate: vi.fn(() => bullClient),
+      }) as unknown as RedisService & {
+        flushdb: ReturnType<typeof vi.fn>;
+        duplicate: ReturnType<typeof vi.fn>;
+      };
+
+      await service.onApplicationBootstrap();
+      expect(service.flushdb).toHaveBeenCalled();
+      expect(service.duplicate).toHaveBeenCalledWith({ db: 1 });
+      expect(bullClient.flushdb).toHaveBeenCalled();
+      // 复制出来的连接用完必须断开，否则进程无法退出
+      expect(bullClient.quit).toHaveBeenCalled();
+    });
+
+    it('Bull 与应用同库时不重复清理', async () => {
+      vi.spyOn(Logger.prototype, 'debug').mockImplementation(() => undefined);
+      process.env.REDIS_INIT = 'true';
+      process.env.REDIS_DB = '0';
+      process.env.BULL_DB = '0';
+      /** 缓存服务替身 */
+      const service = serviceOf({
+        flushdb: vi.fn(async () => 'OK'),
+        duplicate: vi.fn(),
+      }) as unknown as RedisService & {
+        flushdb: ReturnType<typeof vi.fn>;
+        duplicate: ReturnType<typeof vi.fn>;
+      };
+
+      await service.onApplicationBootstrap();
+      expect(service.flushdb).toHaveBeenCalled();
+      expect(service.duplicate).not.toHaveBeenCalled();
     });
   });
 });

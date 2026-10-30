@@ -46,9 +46,9 @@ describe('password.util', () => {
     expect(await verifyPassword('abc12345', 'scrypt$0$8$1$AAAA$AAAA')).toBe(
       false,
     );
-    expect(await verifyPassword('abc12345', 'scrypt$999999999$8$1$AAAA$AAAA')).toBe(
-      false,
-    );
+    expect(
+      await verifyPassword('abc12345', 'scrypt$999999999$8$1$AAAA$AAAA'),
+    ).toBe(false);
     // 空盐或空哈希
     expect(await verifyPassword('abc12345', 'scrypt$16384$8$1$$')).toBe(false);
   });

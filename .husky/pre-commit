@@ -1,0 +1,10 @@
+# 提交门禁：代码检查与单元测试必须全绿，否则本次提交被拒绝。
+#
+# - 只跑单元测试（vitest.config.ts）；`test:e2e` 需要真实的 PostgreSQL 与 Redis，
+#   不适合放进本地钩子，交给 CI 或手工执行。
+# - 用 `npx --no-install` 而非 `yarn`：钩子里只保证 node/npm 存在，不依赖 yarn 在 PATH 中。
+# - 应急绕过：`git commit --no-verify`；绕过的提交在 CI 的 quality job（lint + test）仍会被拦下。
+# 注：husky 9 起钩子就是普通 shell 脚本，由 .husky/_/h 用 `sh -e` 执行，
+# 不再需要 shebang 与 source _/husky.sh（那两行在 husky 10 会被移除）。
+npx --no-install oxlint --type-aware apps/ libs/
+npx --no-install vitest run

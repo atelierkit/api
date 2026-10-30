@@ -29,7 +29,10 @@ jobs:
           cache: yarn
 
       - name: 安装依赖
+        # CI 里不需要 husky 的 git hooks
         run: yarn install --frozen-lockfile
+        env:
+          HUSKY: 0
 
       - name: 代码检查
         run: yarn lint

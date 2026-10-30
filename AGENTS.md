@@ -33,6 +33,14 @@
   （典型触发：给 `apps/worker` 加一条 `@shared` 导入去「试一下」，会连带把 `apps/api/shared` 整棵树的三种产物吐回源码目录）。
   这些是构建垃圾，`git status` 核对后直接删；提交前务必扫一眼（本项目 `declaration: true` + `composite: true`，产物正常只落在 `dist/apps/<project>/`）。
 
+## 提交门禁（pre-commit）
+
+- `yarn install` 通过 `prepare: husky` 装好钩子，定义在 `.husky/pre-commit`：顺序执行 `yarn lint` → `yarn test`，任一失败即拒绝提交。
+- **不要用 `git commit --no-verify` 绕过**：钩子失败就先修代码或用例；确认是环境问题（缺浏览器、缺 PG 等）时，说明原因由用户决定。
+- 钩子只跑单元测试（`**/*.spec.ts`，`passWithNoTests: true`）；`yarn test:e2e`（`**/*.e2e-spec.ts`）需要真实 PostgreSQL + Redis，只在需要时手工执行。
+- CI（`.github/workflows/docker.yml` 的 `quality` job）跑同样的 `lint` + `test`，`docker` job `needs: quality` —— 本地绕过也过不了远端。
+- ⚠️ 写测试的既有坑：带 `@Type()` 的 DTO 用例必须自己 `import 'reflect-metadata'`（vitest 不走 Nest 引导）；参数装饰器要从 `ROUTE_ARGS_METADATA` 取 `factory` 才能单测；**vitest 不做类型检查**（`apps/api/tsconfig.app.json` 排除了 `**/*spec.ts`），spec 的类型错误要另跑一次性 tsconfig + `tsc --noEmit` 才看得见。
+
 ## Production data: NestJS Observe
 
 This app's production telemetry - traces, errors, logs and metrics - goes to [NestJS Observe](https://observe.nestjs.com). Until `ObserveModule` is registered in `apps/api/app.module.ts`, nothing is sent: `npx @nestjs/observe link` sets it up in one step - it installs `@nestjs/observe`, wires it into the app, and writes the key pair (`OBSERVE_APP_KEY`, `OBSERVE_APP_SECRET`) to `.env`.

@@ -197,6 +197,19 @@ yarn test:e2e
 yarn test:cov
 ```
 
+### 提交门禁（pre-commit）
+
+仓库用 [husky](https://typicode.github.io/husky/) 挂了 `pre-commit` 钩子，**测试不通过就提交不了**：
+
+```bash
+yarn lint   # oxlint --type-aware
+yarn test   # vitest run（只跑单元测试）
+```
+
+- 钩子由 `yarn install` 自动装好（`prepare: husky`，钩子定义在 `.husky/pre-commit`），新克隆的仓库无需额外操作。
+- 只跑单元测试；`yarn test:e2e` 需要真实的 PostgreSQL 与 Redis，不放进本地钩子。
+- 应急绕过用 `git commit --no-verify`，但 CI 的 `quality` job（`lint` + `test`）仍会拦下不合规的提交。
+
 ## 目录结构
 
 ```

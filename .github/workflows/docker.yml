@@ -37,8 +37,9 @@ jobs:
       - name: 代码检查
         run: yarn lint
 
-      - name: 单元测试
-        run: yarn test
+      - name: 单元测试与覆盖率门槛
+        # 覆盖率门槛只在带 --coverage 时生效，所以 CI 跑 test:cov 而不是 test
+        run: yarn test:cov
 
   docker:
     name: 构建并推送镜像

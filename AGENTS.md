@@ -38,7 +38,10 @@
 - `yarn install` 通过 `prepare: husky` 装好钩子，定义在 `.husky/pre-commit`：顺序执行 `yarn lint` → `yarn test`，任一失败即拒绝提交。
 - **不要用 `git commit --no-verify` 绕过**：钩子失败就先修代码或用例；确认是环境问题（缺浏览器、缺 PG 等）时，说明原因由用户决定。
 - 钩子只跑单元测试（`**/*.spec.ts`，`passWithNoTests: true`）；`yarn test:e2e`（`**/*.e2e-spec.ts`）需要真实 PostgreSQL + Redis，只在需要时手工执行。
-- CI（`.github/workflows/docker.yml` 的 `quality` job）跑同样的 `lint` + `test`，`docker` job `needs: quality` —— 本地绕过也过不了远端。
+- **覆盖率门槛**在 `vitest.config.ts` 的 `coverage.thresholds`（当前 89/88/83/88：行/语句/分支/函数，实测约 91%/90%/85%/89%）。
+  只有 `yarn test:cov` 会校验门槛 —— 钩子为了速度只跑 `vitest run`，**CI 跑 `yarn test:cov`**，所以本地绕过会在 CI 红。
+  口径固定为 `apps/api/**/*.ts` 并排除 `*.spec.ts` 与 `test/`；`main.ts` / `app.module.ts` 属启动装配，不纳入目标。
+- CI（`.github/workflows/docker.yml` 的 `quality` job）跑同样的 `lint` + `test:cov`，`docker` job `needs: quality` —— 本地绕过也过不了远端。
 - ⚠️ 写测试的既有坑：带 `@Type()` 的 DTO 用例必须自己 `import 'reflect-metadata'`（vitest 不走 Nest 引导）；参数装饰器要从 `ROUTE_ARGS_METADATA` 取 `factory` 才能单测；**vitest 不做类型检查**（`apps/api/tsconfig.app.json` 排除了 `**/*spec.ts`），spec 的类型错误要另跑一次性 tsconfig + `tsc --noEmit` 才看得见。
 
 ## Production data: NestJS Observe

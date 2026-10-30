@@ -193,9 +193,15 @@ yarn test
 # 端到端测试
 yarn test:e2e
 
-# 测试覆盖率
+# 测试覆盖率（同时校验门槛，不达标直接失败）
 yarn test:cov
 ```
+
+覆盖率口径写在 `vitest.config.ts` 的 `coverage` 里：统计 `apps/api/**/*.ts`，排除 `*.spec.ts` 与 `test/`
+（不显式圈定 include 时，v8 只统计「被测试加载过的文件」，controllers 与装配层会整个消失，数字会虚高十几个点）。
+
+当前实测约 **91% 行 / 90% 语句 / 85% 分支**，门槛设在 89/88/83/88（行/语句/分支/函数），留 2-3 个点余量防误红。
+`apps/api/main.ts`、`app.module.ts` 属于启动装配，要测就得连真实 PG/Redis，未纳入目标。
 
 ### 提交门禁（pre-commit）
 

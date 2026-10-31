@@ -2,6 +2,14 @@ name: 构建并推送镜像
 
 # 提及：镜像默认推送到 GitHub Container Registry（ghcr.io，用内置 GITHUB_TOKEN，无需额外配置）；
 # 若要像私有项目那样推阿里云私有仓库，追加一个 docker/login-action 与对应的 secrets 即可。
+#
+# ⚠️ action 版本约束：GitHub 已于 2026-09-23 从 runner 移除 Node.js 20 运行时，
+#    仍以 node20 为运行时的 action 会被强制改用 node24 并告警（后续直接失败）。
+#    故此处所有 action 都锁在「运行时为 node24」的 major 版本：
+#      actions/checkout@v7、actions/setup-node@v7、
+#      docker/setup-buildx-action@v4、docker/login-action@v4、
+#      docker/metadata-action@v6、docker/build-push-action@v7。
+#    以后升级 action 时，请连同它的 action.yml 里 `runs.using` 一起核对。
 on:
   push:
     branches: [main]
@@ -20,10 +28,10 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: 拉取代码
-        uses: actions/checkout@v6
+        uses: actions/checkout@v7
 
       - name: 安装 Node 运行环境
-        uses: actions/setup-node@v4
+        uses: actions/setup-node@v7
         with:
           node-version: '24.x'
           cache: yarn
@@ -50,15 +58,15 @@ jobs:
       packages: write
     steps:
       - name: 拉取代码
-        uses: actions/checkout@v6
+        uses: actions/checkout@v7
 
       - name: 准备 Buildx
-        uses: docker/setup-buildx-action@v3
+        uses: docker/setup-buildx-action@v4
 
       - name: 登录镜像仓库
         # PR 只验证能否构建，不推送
         if: github.event_name != 'pull_request'
-        uses: docker/login-action@v3
+        uses: docker/login-action@v4
         with:
           registry: ${{ env.REGISTRY }}
           username: ${{ github.actor }}
@@ -66,7 +74,7 @@ jobs:
 
       - name: 生成镜像标签
         id: meta
-        uses: docker/metadata-action@v5
+        uses: docker/metadata-action@v6
         with:
           images: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}
           tags: |
@@ -78,7 +86,7 @@ jobs:
             type=raw,value=latest,enable={{is_default_branch}}
 
       - name: 构建并推送
-        uses: docker/build-push-action@v6
+        uses: docker/build-push-action@v7
         with:
           # 各子应用的 Dockerfile 放在自己目录下，构建上下文仍是仓库根（需要 package.json / tsconfig / libs）
           context: .

@@ -19,6 +19,7 @@ function controllerOf() {
     setValid: vi.fn(async (_id: number, _valid: number, _reqId: number) => 30),
     update: vi.fn(async (..._args: unknown[]) => 1),
     password: vi.fn(async (..._args: unknown[]) => ({ code: 0 })),
+    unlock: vi.fn(async (_id: number, _password: string) => ({ code: 0 })),
     email: vi.fn(async (..._args: unknown[]) => 1),
   };
   /** 令牌服务替身 */
@@ -112,6 +113,15 @@ describe('UserController', () => {
 
     await controller.email('a@b.com', 7, '1.2.3.4');
     expect(userSrv.email).toHaveBeenCalledWith(7, 'a@b.com', '1.2.3.4');
+  });
+
+  it('unlock 用当前用户与密码解锁，用户ID来自令牌', async () => {
+    /** 被测控制器与替身 */
+    const { controller, userSrv } = controllerOf();
+    expect(await controller.unlock({ password: 'abc12345' }, 7)).toEqual({
+      code: 0,
+    });
+    expect(userSrv.unlock).toHaveBeenCalledWith(7, 'abc12345');
   });
 
   it('logout 作废当前令牌', async () => {

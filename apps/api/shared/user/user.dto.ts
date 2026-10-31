@@ -83,6 +83,14 @@ export class PasswordDto {
   newPassword!: string;
 }
 
+/** 屏幕锁定解锁DTO */
+export class UnlockDto {
+  /** 登录密码 */
+  @IsString({ message: '密码格式不正确！' })
+  @IsNotEmpty({ message: '密码不能为空！' })
+  password!: string;
+}
+
 /** 重置密码-发送验证码DTO */
 export class ResetCodeDto {
   /** 电子邮箱 */

@@ -517,6 +517,52 @@ describe('UserService', () => {
     });
   });
 
+  describe('unlock', () => {
+    it('用户不存在时 404，被禁用时 403，未设置密码时 409', async () => {
+      /** 被测服务与替身 */
+      const { service, repository } = serviceOf();
+      await expect(service.unlock(1, 'abc12345')).rejects.toBeInstanceOf(
+        NotFoundException,
+      );
+      repository.findOne.mockResolvedValue({ ...USER, status: false });
+      await expect(service.unlock(1, 'abc12345')).rejects.toBeInstanceOf(
+        ForbiddenException,
+      );
+      repository.findOne.mockResolvedValue({ ...USER, password: '' });
+      await expect(service.unlock(1, 'abc12345')).rejects.toBeInstanceOf(
+        ConflictException,
+      );
+    });
+
+    it('密码错误时 400（不是 401，避免前端按登录过期把人踢出去）', async () => {
+      /** 被测服务与替身 */
+      const { service, repository } = serviceOf();
+      repository.findOne.mockResolvedValue({ ...USER, password: HASH });
+      await expect(
+        service.unlock(1, 'wrong123'),
+      ).rejects.toBeInstanceOf(BadRequestException);
+    });
+
+    it('解锁成功：校验密码并刷新最后会话时间，不重新签发令牌', async () => {
+      /** 被测服务与替身 */
+      const { service, redis, repository, operate } = serviceOf();
+      repository.findOne.mockResolvedValue({ ...USER, password: HASH });
+      /** 响应报文 */
+      const result = await service.unlock(1, 'abc12345');
+      expect(result).toEqual({ code: 0, msg: '解锁成功！' });
+      // 刷新会话时间
+      /** 更新数据 */
+      const value = repository.update.mock.calls[0][1] as Record<
+        string,
+        unknown
+      >;
+      expect(typeof value.lastSessionAt).toBe('number');
+      // 不签发令牌、不写操作序号
+      expect(redis.addCode).not.toHaveBeenCalled();
+      expect(operate.create).not.toHaveBeenCalled();
+    });
+  });
+
   describe('reset', () => {
     it('验证码缓存不存在或已过期时 400，过期还要顺手删键', async () => {
       /** 被测服务与替身 */

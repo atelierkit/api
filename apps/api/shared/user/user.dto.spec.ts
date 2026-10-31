@@ -12,6 +12,7 @@ import {
   ResetCodeDto,
   ResetDto,
   TokenValidDto,
+  UnlockDto,
   UserUpdateDto,
 } from './user.dto.js';
 
@@ -100,6 +101,15 @@ describe('user.dto', () => {
           newPassword: 'a1'.repeat(PASSWORD_MAX),
         }),
       ).toContain('newPassword');
+    });
+  });
+
+  describe('UnlockDto', () => {
+    it('只要求密码必填', async () => {
+      expect(await fieldsOf(UnlockDto, {})).toContain('password');
+      expect(await fieldsOf(UnlockDto, { password: 'abc12345' })).toHaveLength(
+        0,
+      );
     });
   });
 

@@ -751,6 +751,41 @@ export class UserService extends CommonService<UserEntity, UserLogEntity> {
   }
 
   /**
+   * 屏幕锁定解锁（登录态）
+   *
+   * 注：只校验密码是否匹配，通过后刷新最后会话时间；不重新签发令牌 ——
+   * 屏幕锁定期间令牌仍有效，若令牌已过期则请求会先被令牌守卫挡下，应当重新登录而非解锁
+   *
+   * @param id 用户ID
+   * @param password 密码
+   * @returns 响应报文
+   */
+  async unlock(id: number, password: string) {
+    /** 用户，注：password 列 select:false，需显式指定 */
+    const user = await this.userRepository.findOne({
+      select: { id: true, username: true, password: true, status: true },
+      where: { id },
+    });
+    if (!user) {
+      throw new NotFoundException(`当前用户不存在！`);
+    }
+    if (!user.status) {
+      throw new ForbiddenException('用户已被禁用！');
+    }
+    if (!user.password) {
+      throw new ConflictException('该账号尚未设置密码，请先通过邮箱重置密码！');
+    }
+    // 密码不匹配时用 400 而非 401：登录态本身有效，错的只是表单里的密码；
+    // 前端拦截器把非匿名请求的 401 一律当「登录已过期」踢回登录页，输错一次就会被登出
+    if (!(await verifyPassword(password, user.password))) {
+      throw new BadRequestException('密码不正确！');
+    }
+    // 解锁成功，刷新最后会话时间
+    await this.session(id);
+    return { code: 0, msg: `解锁成功！` };
+  }
+
+  /**
    * 发送重置密码验证码
    *
    * 注：邮箱不存在或账号被禁用时同样返回统一文案且不发送邮件，避免被用来探测账号

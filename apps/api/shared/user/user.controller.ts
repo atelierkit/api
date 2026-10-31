@@ -14,7 +14,7 @@ import { RedisService } from '../redis/redis.service.js';
 import { ClientIp, ReqId } from '../req/req.decorator.js';
 import { TokenService } from '../token/token.service.js';
 import { UserId } from './user.decorator.js';
-import { TokenValidDto, PasswordDto, UserUpdateDto } from './user.dto.js';
+import { TokenValidDto, PasswordDto, UnlockDto, UserUpdateDto } from './user.dto.js';
 import { UserService } from './user.service.js';
 import type { AppRequest } from '../common/request.types.js';
 
@@ -156,6 +156,18 @@ export class UserController {
     @ReqId() reqId: number,
   ) {
     return this.userSrv.password(userId, body, token, reqId);
+  }
+
+  /**
+   * 屏幕锁定解锁
+   *
+   * @param body 解锁信息
+   * @param userId 用户ID
+   * @returns 响应报文
+   */
+  @Post('unlock')
+  unlock(@Body() body: UnlockDto, @UserId() userId: number) {
+    return this.userSrv.unlock(userId, body.password);
   }
 
   /**

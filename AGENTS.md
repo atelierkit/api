@@ -30,7 +30,7 @@
   因为两者字段与权限边界完全不同（管理端含 `status` / `roles`）。管理端用户控制器类名叫 `AuthUserController`，
   避免与个人端 `UserController` 重名（`reqs.controller` 按类名记账，重名会让两类请求在日志里分不开）。
 - **`apps/api/cloud`**：自旧私有项目 `marbleqi/api` 的 `src/cloud`（密钥）与 `src/kong`（KONG 站点）**合并**迁入的云服务模块（`CloudModule`），
-  接口前缀统一为 `cloud/`（`/cloud/key`、`/cloud/kong`，另有两个探测接口 `report/:id`、`plugin/:id`），全部 `@Allow('admin')`。
+  接口前缀统一为 `cloud/`（`/cloud/key`、`/cloud/kong`，另有两个探测接口 `summary/:id`、`plugin/:id`），全部 `@Allow('admin')`。
   四条与旧项目**刻意不同**的约定，别按旧代码「改回去」：
   1. **密钥 secret 不出库**：`KeyService.index` / `show` 都走 `PUBLIC_SELECT`（不含 `secret`），详情也不回填；服务端内部要用时才调
      `KeyService.secret(id)`。旧项目 `admin/key` 的详情会把 secret 整个下发浏览器，这里改掉了；因此前端编辑表单是「留空即不改」
@@ -50,11 +50,19 @@
      （`GET|POST /{type}`、`GET|PATCH|DELETE /{type}/{id}`），故 `ObjectService` 不按类型拆；类型白名单在 `object.types.ts` 的 `KONG_OBJECT_TYPES`。
   2. **`type` / `id` 必须校验**：两者都会拼进 Admin API 路径，`type` 走 `@IsIn(KONG_OBJECT_TYPES)`，`id` 走 `@Matches` 的正则（首字符必须是字母数字，
      挡掉 `/` 与 `..`）。旧项目只写了 `@IsNotEmpty`，等于把路径交给前端。
-  3. **分页用 `offset` 自己拼**：旧代码直接拼 `data.next`，而新版 Kong 给的 `next` 是**完整 URL**，拼出来会变成 `http://host:8001http://...`；
-     现在按 `offset` 逐页取，且有 `MAX_PAGES` 上限（超了报 502，不静默返回半份数据）。
-  4. **证书的域名与有效期在后端解析**：Kong 的证书对象不带 `snis` / `start` / `end`，`object/certificate.util.ts` 用 Node 自带的
+  3. **分页用 `offset` 自己拼**：旧代码直接拼 `data.next`，而新版 Kong 给的 `next` 是**完整 URL**（带 `size` 时是相对路径，无下一页时为 `null`，
+     已实测 3.9.4），拼出来会变成 `http://host:8001http://...`；
+     现在按响应里的 `offset` 逐页取（该字段只在还有下一页时出现），且有 `MAX_PAGES` 上限（超了报 502，不静默返回半份数据）。
+  4. **证书的域名与有效期在后端解析**：Kong 的证书对象**不带有效期**（`start` / `end` 只能从 PEM 读），`object/certificate.util.ts` 用 Node 自带的
      `crypto.X509Certificate` 解析 PEM 后补在返回对象上（秒级时间戳，与 Kong 其它时间字段同口径）。这样前端不必再引 `node-forge`；
      解析失败返回 `null`、原样返回对象，一张脏证书不该让整页打不开。
+     ⚠️ **`snis` 以 Kong 返回的为准**：Kong 3.9 的证书对象自带 `snis`（实测），它才是网关里实际生效的绑定；PEM 的 SAN 只是「证书能覆盖哪些域名」，
+     两者可以不一致（一个证书覆盖多个域名、却只给其中一部分建 SNI）。故 `ObjectService.enrich` 只在 Kong 没给 `snis`（空数组 / 老版本没有该字段）时用 PEM 兜底，
+     别按旧私有项目那样直接用 PEM 覆盖。
+  5. **仪表板读 `/` + `/status`，不读许可报告**（2026-10-31 在 Kong 3.9.4 社区版实测）：`/default/license/report` 是**企业版专属**，社区版恒为 404
+     `{"message":"Not found"}`。`KongService.summary()` 并行取 `/`（version / edition / hostname / node_id / lua_version / 插件数）与
+     `/status`（连接数 / `database.reachable`），合并成 `KongSummary` 下发；无数据库模式（DB-less）时 `database` 段不存在，`dbReachable` 给 `null`（不适用），
+     与 `false`（不可达）分开。`/plugins/enabled` 在 3.x 返回 **`{ enabled_plugins: [...] }`**（2.x 才是数组），`KongService.plugin()` 统一成 `string[]`。
 - **`@shared` 路径别名**：根 `tsconfig.json` 的 `paths` 声明 `@shared` → `apps/api/shared/index.ts`、`@shared/*` → `apps/api/shared/*`。
   `shared/` **之外**的代码（`app.module.ts` 等）用 `import { SharedModule } from '@shared'` 或 `@shared/<目录>/<文件>.js`；
   `shared/` **内部**仍用相对路径（保持目录可整体搬迁，也不引入循环依赖风险）。

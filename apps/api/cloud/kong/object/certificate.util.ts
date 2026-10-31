@@ -14,9 +14,10 @@ export interface CertificateInfo {
 /**
  * 解析 PEM 证书，取出域名与有效期
  *
- * 注 1：Kong 的证书对象本身不带 `snis` / `start` / `end`（域名在 `/certificates/{id}/snis` 上，
- * 有效期只能从 PEM 读），旧私有项目是在浏览器里用 `node-forge` 解析的；本仓库改用 Node 自带的
- * `X509Certificate`，后端解析后随列表下发，前端不再引 node-forge（省掉数百 KB 打包体积）
+ * 注 1：Kong 的证书对象**不带有效期**（`start` / `end` 只能从 PEM 读），旧私有项目是在浏览器里
+ * 用 `node-forge` 解析的；本仓库改用 Node 自带的 `X509Certificate`，后端解析后随列表下发，
+ * 前端不再引 node-forge（省掉数百 KB 打包体积）。`snis` 在 3.9 的证书对象里是有的，
+ * 但老版本没有 ⇒ 这里解析出的域名只作兜底，取值优先级见 `ObjectService.enrich`
  * 注 2：解析失败返回 `null` 而不是抛错 —— 列表里只要有一张脏证书，也不该让整页打不开
  *
  * @param pem PEM 格式的证书文本

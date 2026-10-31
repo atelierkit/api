@@ -149,6 +149,12 @@ export class ObjectService {
   /**
    * 给证书对象补上域名与有效期
    *
+   * 注 1：有效期只能从 PEM 里读（Kong 不提供这两个字段），用后端的 `X509Certificate` 解析
+   * 注 2：**域名优先用 Kong 返回的 `snis`** —— Kong 3.9 的证书对象本身带 `snis`（实测），
+   * 它才是网关里真正生效的绑定；PEM 的 SAN 只是「证书能覆盖哪些域名」，两者可以不一致
+   * （例如一个证书绑多个域名、或只给其中一部分建 SNI）。私有项目直接用 PEM 覆盖，
+   * 会把这种差异藏起来，故这里只在 Kong 没给 `snis` 时用 PEM 兜底
+   *
    * @param type 对象类型
    * @param row 原始对象
    * @returns 补齐后的对象，注：非证书类型或证书解析失败时原样返回
@@ -164,6 +170,13 @@ export class ObjectService {
     if (info === null) {
       return row;
     }
-    return { ...row, ...info };
+    /** Kong 里的 SNI 绑定 */
+    const snis = Array.isArray(row['snis']) ? row['snis'] : [];
+    return {
+      ...row,
+      snis: snis.length > 0 ? snis : info.snis,
+      start: info.start,
+      end: info.end,
+    };
   }
 }

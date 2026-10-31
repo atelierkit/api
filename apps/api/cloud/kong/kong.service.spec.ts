@@ -75,6 +75,47 @@ function responseOf(body: unknown, status = 200, statusText = ''): Response {
   );
 }
 
+/**
+ * 取请求地址
+ *
+ * 注：`fetch` 的第一个参数可能是字符串、`URL` 或 `Request`，这里统一成字符串
+ *
+ * @param input 请求参数
+ * @returns 请求地址
+ */
+function urlOf(input: RequestInfo | URL): string {
+  if (typeof input === 'string') {
+    return input;
+  }
+  return input instanceof URL ? input.href : input.url;
+}
+
+/**
+ * 替换全局 fetch（按路径返回不同正文）
+ *
+ * 注：概览要同时请求 `/` 与 `/status`，单个响应替身不够用，这里按路径分发；
+ * 未登记的路径按 404 返回，顺便兜住「请求了预期之外的地址」
+ *
+ * @param routes 路径 → 响应正文
+ * @returns fetch 替身
+ */
+function stubFetchByPath(routes: Record<string, unknown>) {
+  /** fetch 替身 */
+  const fetchMock = vi.fn(
+    async (input: RequestInfo | URL, _init?: RequestInit) => {
+      /** 请求地址 */
+      const url = urlOf(input);
+      /** 命中的路径 */
+      const hit = Object.keys(routes).find((path) => url.endsWith(path));
+      return hit === undefined
+        ? new Response(JSON.stringify({ message: 'Not found' }), { status: 404 })
+        : responseOf(routes[hit]);
+    },
+  );
+  vi.stubGlobal('fetch', fetchMock);
+  return fetchMock;
+}
+
 describe('KongService', () => {
   afterEach(() => {
     vi.unstubAllGlobals();
@@ -94,16 +135,83 @@ describe('KongService', () => {
     });
   });
 
-  describe('report', () => {
-    it('请求 /default/license/report 并原样返回正文', async () => {
+  describe('info / status', () => {
+    it('分别请求 / 与 /status', async () => {
       /** fetch 替身 */
-      const fetchMock = stubFetch(responseOf({ version: '3.6.1' }));
+      const fetchMock = stubFetchByPath({
+        '/status': { server: { total_requests: 3 } },
+        '8001/': { version: '3.9.4' },
+      });
       /** 被测服务 */
       const { service } = serviceOf();
-      expect(await service.report(1)).toEqual({ version: '3.6.1' });
-      expect(fetchMock.mock.calls[0][0]).toBe(
-        'http://kong:8001/default/license/report',
-      );
+      expect(await service.info(1)).toEqual({ version: '3.9.4' });
+      expect(await service.status(1)).toEqual({
+        server: { total_requests: 3 },
+      });
+      expect(fetchMock.mock.calls.map(([input]) => urlOf(input))).toEqual([
+        'http://kong:8001/',
+        'http://kong:8001/status',
+      ]);
+    });
+  });
+
+  describe('summary', () => {
+    it('合并 / 与 /status，字段转成前端用的驼峰', async () => {
+      stubFetchByPath({
+        '8001/': {
+          version: '3.9.4',
+          edition: 'community',
+          hostname: 'home-server',
+          node_id: 'node-1',
+          lua_version: 'LuaJIT 2.1',
+          plugins: {
+            available_on_server: { cors: {}, jwt: {} },
+            enabled_in_cluster: ['cors'],
+          },
+        },
+        '/status': {
+          server: { connections_active: 5, total_requests: 49 },
+          database: { reachable: true },
+        },
+      });
+      /** 被测服务 */
+      const { service } = serviceOf();
+      expect(await service.summary(1)).toEqual({
+        version: '3.9.4',
+        edition: 'community',
+        hostname: 'home-server',
+        nodeId: 'node-1',
+        luaVersion: 'LuaJIT 2.1',
+        pluginCount: 2,
+        enabledCount: 1,
+        connectionsActive: 5,
+        totalRequests: 49,
+        dbReachable: true,
+      });
+    });
+
+    it('无数据库模式（正文没有 database 段）把可达性记为 null', async () => {
+      stubFetchByPath({
+        '8001/': { version: '3.9.4' },
+        '/status': { server: {} },
+      });
+      /** 被测服务 */
+      const { service } = serviceOf();
+      /** 概览 */
+      const summary = await service.summary(1);
+      // null 表示「不适用」，与 false（不可达）是两件事
+      expect(summary.dbReachable).toBeNull();
+      expect(summary.version).toBe('3.9.4');
+      expect(summary.pluginCount).toBe(0);
+    });
+
+    it('任一请求失败就抛错（不返回半真半假的概览）', async () => {
+      stubFetchByPath({ '8001/': { version: '3.9.4' } });
+      /** 被测服务 */
+      const { service } = serviceOf();
+      /** 抛出的异常 */
+      const err = await service.summary(1).catch((error: unknown) => error);
+      expect((err as HttpException).getStatus()).toBe(404);
     });
   });
 
@@ -118,6 +226,27 @@ describe('KongService', () => {
         'http://kong:8001/plugins/enabled',
       );
     });
+
+    it('把 3.x 的 { enabled_plugins } 拆成数组', async () => {
+      stubFetch(responseOf({ enabled_plugins: ['cors', 'prometheus'] }));
+      /** 被测服务 */
+      const { service } = serviceOf();
+      expect(await service.plugin(1)).toEqual(['cors', 'prometheus']);
+    });
+
+    it('2.x 直接返回数组时原样给出', async () => {
+      stubFetch(responseOf(['cors']));
+      /** 被测服务 */
+      const { service } = serviceOf();
+      expect(await service.plugin(1)).toEqual(['cors']);
+    });
+
+    it('正文既不是数组也没有 enabled_plugins 时给空数组', async () => {
+      stubFetch(responseOf({ foo: 1 }));
+      /** 被测服务 */
+      const { service } = serviceOf();
+      expect(await service.plugin(1)).toEqual([]);
+    });
   });
 
   describe('错误透传', () => {
@@ -126,7 +255,7 @@ describe('KongService', () => {
       /** 被测服务 */
       const { service } = serviceOf();
       /** 抛出的异常 */
-      const err = await service.report(1).catch((error: unknown) => error);
+      const err = await service.info(1).catch((error: unknown) => error);
       expect(err).toBeInstanceOf(HttpException);
       expect((err as HttpException).getStatus()).toBe(401);
       expect((err as HttpException).message).toBe('Unauthorized');
@@ -137,7 +266,7 @@ describe('KongService', () => {
       /** 被测服务 */
       const { service } = serviceOf();
       /** 抛出的异常 */
-      const err = await service.report(1).catch((error: unknown) => error);
+      const err = await service.info(1).catch((error: unknown) => error);
       expect((err as HttpException).getStatus()).toBe(502);
       expect((err as HttpException).message).toBe('<html>bad gateway</html>');
     });
@@ -147,7 +276,7 @@ describe('KongService', () => {
       /** 被测服务 */
       const { service } = serviceOf();
       /** 抛出的异常 */
-      const err = await service.report(1).catch((error: unknown) => error);
+      const err = await service.info(1).catch((error: unknown) => error);
       expect(err).toBeInstanceOf(HttpException);
       expect((err as HttpException).getStatus()).toBe(
         HttpStatus.BAD_GATEWAY,

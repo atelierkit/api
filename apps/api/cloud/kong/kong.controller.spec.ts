@@ -28,8 +28,8 @@ function controllerOf() {
     log: vi.fn(async (_id: number) => [] as unknown[]),
     create: vi.fn(async (..._args: unknown[]) => 5),
     update: vi.fn(async (..._args: unknown[]) => 1),
-    report: vi.fn(async (_id: number) => ({ version: '3.6.1' })),
-    plugin: vi.fn(async (_id: number) => ({ enabled_plugins: [] })),
+    summary: vi.fn(async (_id: number) => ({ version: '3.9.4' })),
+    plugin: vi.fn(async (_id: number) => ['cors']),
   };
   return {
     controller: new KongController(kongSrv as unknown as KongService),
@@ -54,12 +54,12 @@ describe('KongController', () => {
     expect(kongSrv.update).toHaveBeenCalledWith(5, { status: false }, 7, 9);
   });
 
-  it('探测接口按站点ID转发（报告 / 插件）', async () => {
+  it('探测接口按站点ID转发（概览 / 插件）', async () => {
     /** 被测控制器与替身 */
     const { controller, kongSrv } = controllerOf();
-    expect(await controller.report(2)).toEqual({ version: '3.6.1' });
-    expect(kongSrv.report).toHaveBeenCalledWith(2);
-    expect(await controller.plugin(2)).toEqual({ enabled_plugins: [] });
+    expect(await controller.summary(2)).toEqual({ version: '3.9.4' });
+    expect(kongSrv.summary).toHaveBeenCalledWith(2);
+    expect(await controller.plugin(2)).toEqual(['cors']);
     expect(kongSrv.plugin).toHaveBeenCalledWith(2);
   });
 });

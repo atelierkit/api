@@ -143,6 +143,30 @@ describe('ObjectService', () => {
       expect(row).toEqual({ id: 'cert-2', cert: '脏数据' });
     });
 
+    it('Kong 自己给了 snis 时以 Kong 为准，不被 PEM 的 SAN 覆盖', async () => {
+      // 注：真机 3.9 的证书对象自带 snis，它才是网关里实际生效的绑定；
+      // 一个证书覆盖 example.com + www.example.com，但只给其中一部分建了 SNI 是常见配置
+      stubFetch({
+        data: [{ id: 'cert-3', cert: TEST_CERT_PEM, snis: ['api.example.com'] }],
+      });
+      /** 被测服务 */
+      const { service } = serviceOf();
+      /** 补齐后的证书 */
+      const [row] = await service.index(3, 'certificates');
+      expect(row['snis']).toEqual(['api.example.com']);
+      // 有效期仍要补上，Kong 不提供这两个字段
+      expect(row['start']).toBe(Date.UTC(2026, 9, 31, 1, 58, 22) / 1000);
+    });
+
+    it('Kong 没给 snis（老版本或空绑定）时用 PEM 的域名兜底', async () => {
+      stubFetch({ data: [{ id: 'cert-4', cert: TEST_CERT_PEM, snis: [] }] });
+      /** 被测服务 */
+      const { service } = serviceOf();
+      /** 补齐后的证书 */
+      const [row] = await service.index(3, 'certificates');
+      expect(row['snis']).toEqual(['example.com', 'www.example.com']);
+    });
+
     it('非证书类型不做任何加工', async () => {
       stubFetch({ data: [{ id: 'r1', cert: '脏数据' }] });
       /** 被测服务 */

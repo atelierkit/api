@@ -422,4 +422,48 @@ describe('SyncService', () => {
     svc.onModuleDestroy();
     expect(client.logout).toHaveBeenCalled();
   });
+
+  it('claimNext 按 RETURNING 的 id 回查完整实体（避免蛇形列名丢失 taskId）', async () => {
+    const qb = {
+      update: vi.fn(() => qb),
+      set: vi.fn(() => qb),
+      where: vi.fn(() => qb),
+      returning: vi.fn(() => qb),
+      execute: vi.fn(async () => ({ raw: [{ id: '42' }] })),
+    };
+    const runRepo = {
+      createQueryBuilder: vi.fn(() => qb),
+      findOneBy: vi.fn(async () => ({
+        id: '42',
+        taskId: '7',
+        target: SYNC_TARGET.BAR_BY_DATE,
+        code: 'sh.600000',
+        fromDate: '2026-01-05',
+        toDate: '2026-01-06',
+        state: SYNC_STATE.RUNNING,
+      })),
+    };
+    const { svc } = makeService({ runRepo });
+
+    const run = await (svc as unknown as { claimNext: () => Promise<unknown> }).claimNext();
+
+    expect(runRepo.findOneBy).toHaveBeenCalledWith({ id: '42' });
+    expect(run).toMatchObject({ id: '42', taskId: '7', fromDate: '2026-01-05' });
+  });
+
+  it('claimNext 无排队执行时返回 null', async () => {
+    const qb = {
+      update: vi.fn(() => qb),
+      set: vi.fn(() => qb),
+      where: vi.fn(() => qb),
+      returning: vi.fn(() => qb),
+      execute: vi.fn(async () => ({ raw: [] })),
+    };
+    const runRepo = { createQueryBuilder: vi.fn(() => qb) };
+    const { svc } = makeService({ runRepo });
+
+    const run = await (svc as unknown as { claimNext: () => Promise<unknown> }).claimNext();
+
+    expect(run).toBeNull();
+  });
 });

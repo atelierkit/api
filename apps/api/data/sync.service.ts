@@ -135,14 +135,16 @@ export class SyncService implements OnApplicationBootstrap, OnModuleDestroy {
       .where('id = (SELECT id FROM sync_runs WHERE state = :state ORDER BY id ASC LIMIT 1)', {
         state: SYNC_STATE.QUEUED,
       })
-      .returning('*')
+      .returning('id')
       .execute();
 
-    const raw = result.raw?.[0];
-    if (!raw) {
+    // ⚠ RETURNING 给的是数据库列名（蛇形），`create(raw)` 不会把它映射成实体驼峰属性
+    // （taskId/fromDate/toDate 会静默变成 undefined）。只取回 id，再按 id 回查一次拿完整实体。
+    const raw = result.raw?.[0] as { id?: string } | undefined;
+    if (!raw?.id) {
       return null;
     }
-    return this.runRepo.create(raw as SyncRunEntity);
+    return this.runRepo.findOneBy({ id: raw.id });
   }
 
   /** 分派执行（按 target 走对应同步器） */

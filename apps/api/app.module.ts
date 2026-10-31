@@ -12,6 +12,7 @@ import {
   SharedModule,
   TokenGuard,
 } from '@shared';
+import { AdminModule } from './admin/admin.module.js';
 import { AuthModule } from './auth/auth.module.js';
 import { CloudModule } from './cloud/cloud.module.js';
 import { DataModule } from './data/data.module.js';
@@ -86,6 +87,7 @@ import { TencentModule } from './tencent/tencent.module.js';
     AuthModule,
     CloudModule,
     TencentModule,
+    AdminModule,
     DataModule,
   ],
   providers: [

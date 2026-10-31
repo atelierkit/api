@@ -17,6 +17,8 @@
   统一由 `@Allow('admin')` 声明所需角色，鉴权本身由全局 `TokenGuard` 完成。
 - **`apps/api/cloud`** —— 云服务模块（`CloudModule`），管理端接口：密钥（`/cloud/key`）、KONG 网关站点（`/cloud/kong`，含 `report/:id` 与 `plugin/:id` 两个探测接口）。
   密钥的 `secret` 只在服务端内部使用，清单与详情都不下发浏览器。
+- **`apps/api/admin`** —— 管理员模块（`AdminModule`），管理端自用的三块：系统配置（`/admin/setting`）、
+  操作日志（`/admin/operate`）、请求日志（`/admin/req`），统一 `@Allow('admin')`。两个日志接口只读。
 - **`apps/api/data`** —— 行情数据模块（`DataModule`），本地 A 股行情（证券 / 交易日历 / 日 K / 复权因子）的同步与浏览：
   写操作（`/data/sync/start`、`/data/sync/pause`）要求 `admin`；快照（`/data/sync/snapshot`）与三个只读查询
   （`/data/security`、`/data/calendar`、`/data/bar`）登录即可。数据源是 baostock 裸 TCP 协议（`data/source/`），
@@ -236,6 +238,7 @@ apps/
 ├── api/                     # HTTP 接口服务
 │   ├── main.ts / app.module.ts / ...
 │   ├── auth/                # 访问控制模块（角色 / 用户 / 令牌）
+│   ├── admin/               # 管理员模块（系统配置 / 操作日志 / 请求日志）
 │   ├── cloud/               # 云服务模块（密钥 / KONG 网关站点）
 │   ├── tencent/             # 腾讯云模块（证书 / DNS / 域名 / CDN / 防火墙 / 轻量服务器）
 │   ├── data/                # 行情数据模块（同步 + 浏览；source/ 协议层、sync/ 同步引擎、entities/ 数据模型）

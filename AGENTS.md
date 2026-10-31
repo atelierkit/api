@@ -91,6 +91,20 @@
   7. 旧方法上的 `@UsePipes(new ValidationPipe())` 已去掉：全局 `APP_PIPE` 就是 `ValidationPipe({whitelist:true})`，方法级那个既多余，
      又不带 `whitelist`（两套口径并存容易误判）。
   8. 旧的 `@cloud` / `@kong` / `@tencent` 路径别名不迁移：本仓库只有 `@shared` 一个别名，模块间走相对路径（必须带 `.js`）。
+- **`apps/api/admin`**：自旧私有项目 `marbleqi/api` 的 `src/admin` 迁入的**管理员模块**（`AdminModule`），
+  只保留管理端自用的三块：系统配置 `admin/setting`、操作日志 `admin/operate`、请求日志 `admin/req`，全部 `@Allow('admin')`。
+  旧 `src/admin/key`、`src/admin/kong`、`src/admin/kong/object` **不在这里** —— 它们已并入 `cloud` 模块（接口前缀 `cloud/`），别按旧目录补回来。
+  四条约定：
+  1. **控制器类名带 `Admin` 前缀**（`AdminSettingController` / `AdminOperateController` / `AdminReqController`）：
+     `shared/setting/setting.controller.ts` 已有一个只读的 `SettingController`（`setting/:code`，个人端读配置用），
+     重名会让 `ReqInterceptor` 记的控制器字段分不开两类请求（与 `AuthUserController` 同一考虑）。
+  2. **配置的增删改查全走 `OptionController` 基类**，`AdminSettingController` 只声明前缀与角色、`SettingDto` 提供字段。
+     `SettingDto` 的 `status` / `value` 用 **`class-validator` 的 `@Allow()`**（与 `@shared` 里那个同名的
+     NestJS 元数据装饰器不是一回事，别引错包）：带校验的只有 `code`，另两个字段挂 `@Allow()` 只为躲开全局 `whitelist` 的剥离。
+  3. **两个日志接口都只读**：操作 / 请求日志由业务服务在写操作时自动追加，管理端不给改与删（审计记录能改等于没有审计）。
+     `admin/req/index` 带 `@ReqId()`，服务层用它把**本次查询自己**那条日志从结果里剔掉。
+  4. **字典接口与清单成对**：`admin/operate/options`、`admin/req/{url,user,controller,action/:controller}` 供前端渲染下拉，
+     别在前端写死枚举（`operate` / `name` 的取值随业务模块增长而变，写死就会漏项）。
 - **`apps/api/data`**：**新建**的行情数据模块（`DataModule`），照 almanac 桌面端的语义重实现（不是从旧私有 `marbleqi/api/src/data` 搬代码，
   那里是 NestJS 11 单表模型，与本仓库 12 + ESM + vitest 不同）。目录：`data/source/`（baostock 裸 TCP 协议层）、
   `data/sync/`（同步引擎：计划 + 4 同步器 + 台账）、`data/entities/`（7 张行情表实体 + DDL）、`data/`（gateway + 同步控制器 + 查询控制器）。

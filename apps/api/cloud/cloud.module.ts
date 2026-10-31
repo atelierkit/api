@@ -9,6 +9,8 @@ import { KeyService } from './key/key.service.js';
 import { KongController } from './kong/kong.controller.js';
 import { KongEntity, KongLogEntity } from './kong/kong.entity.js';
 import { KongService } from './kong/kong.service.js';
+import { KongObjectController } from './kong/object/object.controller.js';
+import { ObjectService } from './kong/object/object.service.js';
 
 /**
  * 云服务模块
@@ -27,8 +29,8 @@ import { KongService } from './kong/kong.service.js';
       KongLogEntity,
     ]),
   ],
-  providers: [KeyService, KongService],
-  controllers: [KeyController, KongController],
-  exports: [KeyService, KongService],
+  providers: [KeyService, KongService, ObjectService],
+  controllers: [KeyController, KongController, KongObjectController],
+  exports: [KeyService, KongService, ObjectService],
 })
 export class CloudModule {}

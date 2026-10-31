@@ -38,12 +38,23 @@
   2. **DTO 按实体重写**：旧 `admin/key/key.dto.ts` 的字段是 `name / description / url / status`（从 kong 抄错的），配合
      `ValidationPipe({whitelist:true})` 会把 `provider / key / secret` 剥掉，建密钥必然 500。现在是 `KeyCreateDto`（六字段必填）+
      `KeyUpdateDto`（全可选）。`status` 一律用 `@IsBoolean`，不能用 `@IsNotEmpty`（它对 `false` 判空）。
-  3. **KONG 探测用 `fetch` 而非 `@nestjs/axios`**：旧项目注入 `HttpService`，本仓库不引 axios；`KongService.request` 用运行时自带的
-     `fetch`（非 2xx 不抛网络错），错误按 `HttpException` 原状态码透传，网关不可达转 502。
+  3. **KONG 探测用 `fetch` 而非 `@nestjs/axios`**：旧项目注入 `HttpService`，本仓库不引 axios；`kongRequest()`（`kong/kong.request.ts`）
+     用运行时自带的 `fetch`（非 2xx 不抛网络错），错误按 `HttpException` 原状态码透传，网关不可达转 502。站点与站点对象共用它。
   4. **TypeORM v1 的 `select` 只认对象写法**：旧项目普遍写 `select: ['id', 'name', 'update.at']`，v1 起运行时**直接抛错**
      （`String-array "select" syntax has been removed`，在 `DbErrorFilter` 里表现为 500，单元测试用替身时发现不了）。
      嵌入列要展开成嵌套对象：`select: { id: true, update: { at: true } }`，并用 `satisfies FindOptionsSelect<Entity>` 让 TS 兜住。
-  站点下的对象管理（旧 `src/kong/object` + web `/kong/:id/*`）**没有迁移**，`kongs` / `kongs_logs` 只存站点自身。
+- **`apps/api/cloud/kong/object`**：站点下的**对象管理**（旧 `src/kong/object` + `src/admin/kong/object` + web 的 `/kong/:id/*`），
+  接口前缀 `cloud/kong/object/`（`index` / `show` / `create` / `update` / `destroy`，全部 POST + 请求体），控制器 `KongObjectController`。
+  `kongs` / `kongs_logs` 仍只存站点自身 —— 对象全在 Kong 那边，本仓库不落库。四条约定：
+  1. **一个服务管六种对象**：Kong 的 `routes` / `services` / `consumers` / `certificates` / `plugins` / `upstreams` 在 Admin API 上是同一套 REST 形状
+     （`GET|POST /{type}`、`GET|PATCH|DELETE /{type}/{id}`），故 `ObjectService` 不按类型拆；类型白名单在 `object.types.ts` 的 `KONG_OBJECT_TYPES`。
+  2. **`type` / `id` 必须校验**：两者都会拼进 Admin API 路径，`type` 走 `@IsIn(KONG_OBJECT_TYPES)`，`id` 走 `@Matches` 的正则（首字符必须是字母数字，
+     挡掉 `/` 与 `..`）。旧项目只写了 `@IsNotEmpty`，等于把路径交给前端。
+  3. **分页用 `offset` 自己拼**：旧代码直接拼 `data.next`，而新版 Kong 给的 `next` 是**完整 URL**，拼出来会变成 `http://host:8001http://...`；
+     现在按 `offset` 逐页取，且有 `MAX_PAGES` 上限（超了报 502，不静默返回半份数据）。
+  4. **证书的域名与有效期在后端解析**：Kong 的证书对象不带 `snis` / `start` / `end`，`object/certificate.util.ts` 用 Node 自带的
+     `crypto.X509Certificate` 解析 PEM 后补在返回对象上（秒级时间戳，与 Kong 其它时间字段同口径）。这样前端不必再引 `node-forge`；
+     解析失败返回 `null`、原样返回对象，一张脏证书不该让整页打不开。
 - **`@shared` 路径别名**：根 `tsconfig.json` 的 `paths` 声明 `@shared` → `apps/api/shared/index.ts`、`@shared/*` → `apps/api/shared/*`。
   `shared/` **之外**的代码（`app.module.ts` 等）用 `import { SharedModule } from '@shared'` 或 `@shared/<目录>/<文件>.js`；
   `shared/` **内部**仍用相对路径（保持目录可整体搬迁，也不引入循环依赖风险）。

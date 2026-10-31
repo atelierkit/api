@@ -1,0 +1,46 @@
+// 外部依赖
+import 'reflect-metadata';
+import { plainToInstance } from 'class-transformer';
+import { validate } from 'class-validator';
+import { describe, expect, it } from 'vitest';
+// 内部依赖
+import { CdnListDto, CdnOperateDto, CdnRemarkDto } from './cdn.dto.js';
+
+/**
+ * 校验入参
+ *
+ * @param cls DTO 类型
+ * @param value 原始入参
+ * @returns 出错的字段名清单
+ */
+async function fieldsOf(
+  cls: new () => object,
+  value: Record<string, unknown>,
+): Promise<string[]> {
+  /** DTO 实例 */
+  const dto = plainToInstance(cls, value);
+  /** 校验结果 */
+  const errors = await validate(dto, { whitelist: true });
+  return errors.map((error) => error.property);
+}
+
+describe('cdn.dto', () => {
+  it('备注允许空串（清空备注），但域名必填', async () => {
+    expect(
+      await fieldsOf(CdnRemarkDto, { Domain: 'cdn.example.com', Remark: '' }),
+    ).toEqual([]);
+    expect(await fieldsOf(CdnRemarkDto, { Remark: 'x' })).toEqual(['Domain']);
+  });
+
+  it('操作入参只要域名', async () => {
+    expect(await fieldsOf(CdnOperateDto, { Domain: 'cdn.example.com' })).toEqual([]);
+    expect(await fieldsOf(CdnOperateDto, { Domain: '' })).toEqual(['Domain']);
+  });
+
+  it('列表入参全可选', async () => {
+    expect(await fieldsOf(CdnListDto, {})).toEqual([]);
+    /** 实例 */
+    const dto = plainToInstance(CdnListDto, { Offset: '0', Limit: '10', Domain: 'x' });
+    expect(dto).toEqual({ Offset: 0, Limit: 10, Domain: 'x' });
+  });
+});

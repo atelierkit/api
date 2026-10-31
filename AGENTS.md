@@ -63,6 +63,34 @@
      `{"message":"Not found"}`。`KongService.summary()` 并行取 `/`（version / edition / hostname / node_id / lua_version / 插件数）与
      `/status`（连接数 / `database.reachable`），合并成 `KongSummary` 下发；无数据库模式（DB-less）时 `database` 段不存在，`dbReachable` 给 `null`（不适用），
      与 `false`（不可达）分开。`/plugins/enabled` 在 3.x 返回 **`{ enabled_plugins: [...] }`**（2.x 才是数组），`KongService.plugin()` 统一成 `string[]`。
+- **`apps/api/tencent`**：自旧私有项目 `marbleqi/api` 的 `src/tencent` 迁入的**腾讯云模块**（`TencentModule`），
+  接口前缀 `tencent/`（`ssl` / `dns` / `domain` / `cdn` / `firewall` / `lighthouse`），全部 `@Allow('admin')`；
+  依赖 `CloudModule` —— `KeyService` 取密钥、`KongService` + `ObjectService` 把 SSL 证书部署到 KONG 站点。约定：
+  1. **签名是纯函数，且有官方示例向量兜底**：`api/api.sign.ts` 只管算（`canonicalRequestOf` / `stringToSignOf` /
+     `authorizationOf` / `headersOf`），不碰网络；`api.sign.spec.ts` 里那两个哈希（`35e9c5b0…`、`7019a55b…`）
+     取自腾讯云官方《签名方法 v3》示例，**改动签名实现后这两个值必须仍然相等**，别当成魔法数删掉。
+     日期一律按 **UTC** 算（`dateOf`）—— 东八区凌晨时段取本地日期会直接签错。
+  2. **不引 `@nestjs/axios`**：请求走运行时自带的 `fetch`（`api/api.request.ts`），与 `cloud/kong/kong.request.ts` 同一套做法；
+     超时 15s，连不上 / 非 2xx 转 `HttpException`（502 / 原状态码）。**腾讯云的业务错误是 HTTP 200 + `Response.Error`**，
+     该正文原样返回给前端（旧项目契约），不要在后端改判成 HTTP 错误。
+  3. **密钥 secret 只在服务端出现**：`KeyService.show(id)` 校验密钥存在与 `provider === 'tencent'`，
+     `KeyService.secret(id)` 单独取 Secret（`show` 的 select 不含它）。地域参数会进请求头，`ApiService` 里用
+     `^[a-z0-9-]*$` 挡掉换行等字符。
+  4. **DTO 按腾讯云参数表重写，不要照抄旧项目**（旧 DTO 与官方参数名不一致，配上 `ValidationPipe({whitelist:true})`
+     会静默剥字段，表现为腾讯云报 `MissingParameter`）：
+     - `DnsCreateDto` 旧字段是 `Type` / `Name`（腾讯云没有这两个参数），前端提交的 `RecordType` / `SubDomain` 被剥掉 ⇒ 建记录必失败；
+       现在按 `CreateRecord` 的 `Domain` / `RecordType` / `RecordLine` / `Value` / `SubDomain` / `TTL` / `MX` / `Status` / `Remark` 声明，
+       `DnsModifyDto` 继承它并补 `RecordId`（旧 DTO 漏了 `RecordLine` / `Status`，改线路与启停「看起来成功」其实没生效）。
+     - `CdnRemarkDto` / `DomainRemarkDto` 的备注**允许空串**：腾讯云约定「删除备注请提交空内容」，旧 DTO 用 `@IsNotEmpty`
+       把清空操作挡在 400。反例：`SslListDto` 的 `Limit` 不能给 0（`@Min(1)`）。
+     - 需要透传给腾讯云的字段必须**逐个声明**（`whitelist` 会剥掉未声明的），字段名与官方逐字一致。
+  5. **取单条解析记录用 `DescribeRecord`**（`dns/record/:id`，参数 `Domain` + `RecordId`）：
+     旧项目错用了 `DescribeRecordList` —— 它既不认 `RecordId`、也不返回 `RecordInfo`，编辑弹窗永远只能退回默认表单。
+  6. **SSL 部署不打印证书详情**：旧 `deploy` 把整份 `DescribeCertificateDetail`（**含私钥**）打进 debug 日志；
+     现在只记证书 ID 与站点 ID，并且先看 `cert.Error`（旧代码只判公钥为空，证书不存在时用户看到的是「内容或私钥为空」）。
+  7. 旧方法上的 `@UsePipes(new ValidationPipe())` 已去掉：全局 `APP_PIPE` 就是 `ValidationPipe({whitelist:true})`，方法级那个既多余，
+     又不带 `whitelist`（两套口径并存容易误判）。
+  8. 旧的 `@cloud` / `@kong` / `@tencent` 路径别名不迁移：本仓库只有 `@shared` 一个别名，模块间走相对路径（必须带 `.js`）。
 - **`@shared` 路径别名**：根 `tsconfig.json` 的 `paths` 声明 `@shared` → `apps/api/shared/index.ts`、`@shared/*` → `apps/api/shared/*`。
   `shared/` **之外**的代码（`app.module.ts` 等）用 `import { SharedModule } from '@shared'` 或 `@shared/<目录>/<文件>.js`；
   `shared/` **内部**仍用相对路径（保持目录可整体搬迁，也不引入循环依赖风险）。

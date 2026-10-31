@@ -40,7 +40,14 @@ import {
   USERNAME_RE,
   USER_MAX,
 } from './user.constant.js';
-import { LoginDto, PasswordDto, RegisterDto, ResetDto } from './user.dto.js';
+import {
+  LoginDto,
+  PasswordDto,
+  RegisterDto,
+  ResetDto,
+  UserManageCreateDto,
+  UserManageUpdateDto,
+} from './user.dto.js';
 import { UserEntity, UserLogEntity } from './user.entity.js';
 
 /** 用户服务 */
@@ -102,6 +109,112 @@ export class UserService extends CommonService<UserEntity, UserLogEntity> {
         update: { operateId: MoreThan(operateId) },
       },
     });
+  }
+
+  /**
+   * 创建用户（管理端）
+   *
+   * 注：覆盖基类实现 —— 用户名需先归一化、密码需先哈希，否则明文入库且该账号永远登录不上；
+   * 自助注册走 `register()`，两者的差别在于入口与开关，落库字段保持一致
+   *
+   * @param value 用户创建信息
+   * @param userId 操作用户ID
+   * @param reqId 请求日志ID
+   * @returns 新用户ID
+   * @throws BadRequestException 用户名或密码不符合规则时抛出
+   * @throws ConflictException 用户名/邮箱已占用或用户数已达上限时抛出
+   */
+  async create(
+    value: UserManageCreateDto,
+    userId: number = 0,
+    reqId: number = 0,
+  ) {
+    /** 归一化并校验用户名 */
+    const username = this.checkUsername(value.username);
+    // 密码策略校验
+    this.checkPassword(value.password, username);
+    /** 归一化邮箱，注：空串转 NULL，否则第二个不填邮箱的用户会撞唯一索引 */
+    const email = this.toEmail(value.email);
+    /** 用户名存在标记 */
+    if (await this.userRepository.existsBy({ username })) {
+      throw new ConflictException(`用户名${username}已被占用！`);
+    }
+    // 邮箱为可选资料，填了才校验唯一性
+    if (email && (await this.userRepository.existsBy({ email }))) {
+      throw new ConflictException(`邮箱${email}已被使用！`);
+    }
+    /** 当前用户数 */
+    const count = await this.userRepository.count();
+    if (count >= USER_MAX) {
+      throw new ConflictException(
+        `当前系统限制最大用户数为${USER_MAX}，无法继续创建！`,
+      );
+    }
+    /** 密码哈希，注：scrypt 约 50-100ms */
+    const password = await hashPassword(value.password);
+    return super.create(
+      {
+        username,
+        password,
+        passwordAt: Date.now(),
+        email,
+        name: (value.name ?? '').trim() || username,
+        avatar: (value.avatar ?? '').trim(),
+        roles: value.roles ?? [],
+        status: value.status ?? true,
+      },
+      userId,
+      reqId,
+    );
+  }
+
+  /**
+   * 更新用户（管理端）
+   *
+   * 注：覆盖基类实现 —— 邮箱需归一化后落库（空串转 NULL，避免撞唯一索引）；
+   * 只处理提交了的字段，未提交的字段保持原值
+   *
+   * @param id 用户ID
+   * @param value 用户更新信息
+   * @param userId 操作用户ID
+   * @param reqId 请求日志ID
+   * @returns 用户ID
+   * @throws NotFoundException 用户不存在时抛出
+   * @throws ConflictException 邮箱被其他用户占用时抛出
+   */
+  async update(
+    id: number,
+    value: UserManageUpdateDto,
+    userId: number = 0,
+    reqId: number = 0,
+  ) {
+    /** 用户，注：需要邮箱原值判断「是否真的换了邮箱」 */
+    const user = await this.show(id, 'status');
+    if (!user) {
+      throw new NotFoundException(`当前用户不存在！`);
+    }
+    /** 归一化邮箱 */
+    const email = this.toEmail(value.email);
+    // 邮箱被其他用户占用时提前拦截，注：自己沿用原邮箱不算冲突
+    if (email && email !== user.email) {
+      /** 邮箱存在标记 */
+      const exist = await this.userRepository.existsBy({ email });
+      if (exist) {
+        throw new ConflictException(`邮箱${email}已被使用！`);
+      }
+    }
+    return super.update(
+      id,
+      {
+        ...(value.name === undefined ? {} : { name: value.name.trim() }),
+        ...(value.avatar === undefined ? {} : { avatar: value.avatar.trim() }),
+        ...(value.email === undefined ? {} : { email }),
+        ...(value.status === undefined ? {} : { status: value.status }),
+        ...(value.roles === undefined ? {} : { roles: value.roles }),
+      },
+      userId,
+      reqId,
+    );
   }
 
   /**
@@ -361,7 +474,10 @@ export class UserService extends CommonService<UserEntity, UserLogEntity> {
    * @param keep 需要保留的令牌，注：形如 `<用户ID>:<随机码>`，改密时用于保留当前会话
    * @returns 清理的令牌数
    */
-  private async purgeTokens(userId: number, keep: string = ''): Promise<number> {
+  private async purgeTokens(
+    userId: number,
+    keep: string = '',
+  ): Promise<number> {
     /** 该用户全部令牌键，注：采用 scan 游标遍历，避免 keys 命令阻塞缓存服务 */
     const keys = await this.redisSrv.scanKeys(`token:${userId}:*`);
     /** 待删除令牌键 */
@@ -537,9 +653,7 @@ export class UserService extends CommonService<UserEntity, UserLogEntity> {
     }
     // 老数据（迁移前只有邮箱、没有密码）引导到重置流程，而不是直接判密码错
     if (!user.password) {
-      throw new ConflictException(
-        '该账号尚未设置密码，请先通过邮箱重置密码！',
-      );
+      throw new ConflictException('该账号尚未设置密码，请先通过邮箱重置密码！');
     }
     /** 密码校验结果 */
     const ok = await verifyPassword(value.password, user.password);
@@ -596,9 +710,7 @@ export class UserService extends CommonService<UserEntity, UserLogEntity> {
       throw new ForbiddenException('用户已被禁用！');
     }
     if (!user.password) {
-      throw new ConflictException(
-        '该账号尚未设置密码，请先通过邮箱重置密码！',
-      );
+      throw new ConflictException('该账号尚未设置密码，请先通过邮箱重置密码！');
     }
     // 先校验原密码，避免攻击者拿登录态直接改密
     if (!(await verifyPassword(value.oldPassword, user.password))) {

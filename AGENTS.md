@@ -22,6 +22,13 @@
   操作·请求日志 / 缓存 / 队列 / 邮件 / 监控）。它随 `apps/api` 一起构建（产物 `dist/apps/api/shared/`），当前**只有 api 使用**。
   两条不受「库还是目录」影响的 ESM 铁律：内部相对导入**必须带 `.js`**；**不用桶文件（`index.ts`）互相导入**
   （ESM 下会因 TDZ 抛 `Cannot access 'X' before initialization`），一律按文件具名导入 —— `shared/index.ts` 只对外聚合，内部不反向引用它。
+- **`apps/api/auth`**：自旧私有项目 `marbleqi/api` 的 `src/auth` 迁入的**访问控制模块**（`AuthModule`），只含管理端控制器：
+  角色 `/auth/role`、用户 `/auth/user`、令牌 `/auth/token`，全部用 `@Allow('admin')` 声明所需角色（鉴权由全局 `TokenGuard` 完成）。
+  ⚠️ 旧项目里的**分类（`category`）与产品（`product`）不迁移**，别照旧目录补回来。
+  管理端建号/改资料走 `UserService.create` / `update` 的**覆盖实现**（用户名归一化 + 密码哈希 + 邮箱空串转 NULL），
+  DTO 是 `shared/user/user.dto.ts` 的 `UserManageCreateDto` / `UserManageUpdateDto` —— 与个人端的 `UserUpdateDto` 刻意不同名，
+  因为两者字段与权限边界完全不同（管理端含 `status` / `roles`）。管理端用户控制器类名叫 `AuthUserController`，
+  避免与个人端 `UserController` 重名（`reqs.controller` 按类名记账，重名会让两类请求在日志里分不开）。
 - **`@shared` 路径别名**：根 `tsconfig.json` 的 `paths` 声明 `@shared` → `apps/api/shared/index.ts`、`@shared/*` → `apps/api/shared/*`。
   `shared/` **之外**的代码（`app.module.ts` 等）用 `import { SharedModule } from '@shared'` 或 `@shared/<目录>/<文件>.js`；
   `shared/` **内部**仍用相对路径（保持目录可整体搬迁，也不引入循环依赖风险）。

@@ -1,11 +1,14 @@
 // 外部依赖
 import {
+  IsArray,
+  IsBoolean,
   IsNotEmpty,
   IsOptional,
   IsEmail,
   IsIn,
   IsString,
   MaxLength,
+  ValidateIf,
 } from 'class-validator';
 // 内部依赖
 import { TOKEN_VALIDS } from '../token/token.constant.js';
@@ -123,4 +126,83 @@ export class TokenValidDto {
   /** 令牌有效期（单位：分钟），注：0 表示长期有效，取值必须在可选档位内 */
   @IsIn(TOKEN_VALIDS, { message: '令牌有效期不合法！' })
   valid!: number;
+}
+
+/**
+ * 管理端-用户创建DTO
+ *
+ * 注：与 `UserUpdateDto`（登录用户改自己的资料）区分，此处是管理员建号，
+ * 因此必须带登录凭据；用户名与密码的完整规则由 UserService 统一校验
+ */
+export class UserManageCreateDto {
+  /** 登录用户名 */
+  @IsString({ message: '用户名格式不正确！' })
+  @IsNotEmpty({ message: '用户名不能为空！' })
+  username!: string;
+
+  /** 登录密码（明文提交，服务端负责校验与哈希后入库） */
+  @IsString({ message: '密码格式不正确！' })
+  @IsNotEmpty({ message: '密码不能为空！' })
+  @MaxLength(PASSWORD_MAX, { message: `密码长度不能超过${PASSWORD_MAX}位！` })
+  password!: string;
+
+  /** 昵称，注：缺省时取用户名 */
+  @IsOptional()
+  @IsString({ message: '昵称格式不正确！' })
+  name?: string;
+
+  /** 头像URL */
+  @IsOptional()
+  @IsString({ message: '头像URL格式不正确！' })
+  avatar?: string;
+
+  /** 电子邮箱，注：可选资料，空串视为未填写（否则撞 users.email 的唯一索引） */
+  @ValidateIf((_value: UserManageCreateDto, email?: string) => !!email)
+  @IsEmail({}, { message: '电子邮箱格式不正确！' })
+  email?: string;
+
+  /** 启用状态，true表示启用，false表示禁用，注：缺省为启用 */
+  @IsOptional()
+  @IsBoolean({ message: '启用状态格式不正确！' })
+  status?: boolean;
+
+  /** 用户授权角色，注：缺省为空（不含任何管理权限） */
+  @IsOptional()
+  @IsArray({ message: '授权角色格式不正确！' })
+  @IsString({ each: true, message: '授权角色格式不正确！' })
+  roles?: string[];
+}
+
+/**
+ * 管理端-用户信息修改DTO
+ *
+ * 注：只改资料与权限，不含改密 —— 改密走用户自己的 `/user/password`
+ * 或 `/passport/reset`（邮箱验证码），避免管理员接口顺手重置他人密码
+ */
+export class UserManageUpdateDto {
+  /** 昵称 */
+  @IsOptional()
+  @IsString({ message: '昵称格式不正确！' })
+  name?: string;
+
+  /** 头像URL */
+  @IsOptional()
+  @IsString({ message: '头像URL格式不正确！' })
+  avatar?: string;
+
+  /** 电子邮箱，注：可选资料，空串表示清空（落库为 NULL） */
+  @ValidateIf((_value: UserManageUpdateDto, email?: string) => !!email)
+  @IsEmail({}, { message: '电子邮箱格式不正确！' })
+  email?: string;
+
+  /** 启用状态，true表示启用，false表示禁用 */
+  @IsOptional()
+  @IsBoolean({ message: '启用状态格式不正确！' })
+  status?: boolean;
+
+  /** 用户授权角色 */
+  @IsOptional()
+  @IsArray({ message: '授权角色格式不正确！' })
+  @IsString({ each: true, message: '授权角色格式不正确！' })
+  roles?: string[];
 }

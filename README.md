@@ -13,6 +13,8 @@
 - **`apps/api`** —— HTTP 接口服务，承载数据存取、统一鉴权，为前端提供 REST API。
 - **`apps/worker`** —— 后台常驻服务，不监听端口，用于定时任务、队列消费、长时异步任务（如下载引擎管理）。
 - **`apps/api/shared`** —— API 服务的共用领域模块（用户 / 角色 / 令牌 / 配置 / 操作日志 / 请求日志 / 缓存 / 队列 / 邮件 / 异常监控），以 `SharedModule` 对外提供。
+- **`apps/api/auth`** —— 访问控制模块（`AuthModule`），只放**管理端**接口：角色（`/auth/role`）、用户（`/auth/user`）、令牌（`/auth/token`），
+  统一由 `@Allow('admin')` 声明所需角色，鉴权本身由全局 `TokenGuard` 完成。
 - **`libs/`** —— 可复用 NestJS 库（当前为空，待两服务出现共享代码时拆分）。
 
 ## 功能
@@ -222,6 +224,7 @@ yarn test   # vitest run（只跑单元测试）
 apps/
 ├── api/                     # HTTP 接口服务
 │   ├── main.ts / app.module.ts / ...
+│   ├── auth/                # 访问控制模块（角色 / 用户 / 令牌）
 │   ├── shared/              # 共用领域模块（user / token / redis / queue / monitor ...）
 │   └── test/                # e2e 测试
 └── worker/                  # 后台常驻服务（定时任务 / 队列消费）

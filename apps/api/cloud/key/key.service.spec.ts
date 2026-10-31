@@ -96,10 +96,18 @@ describe('KeyService', () => {
         string,
         unknown
       >;
-      /** 选中的字段 */
-      const select = options.select as string[];
-      expect(select).toContain('key');
-      expect(select).not.toContain('secret');
+      /** 选中的字段，注：TypeORM v1 只认对象写法，字符串数组会在运行时直接抛错 */
+      const select = options.select as Record<string, unknown>;
+      expect(select['key']).toBe(true);
+      expect(select['secret']).toBeUndefined();
+      // 嵌入列要展开成嵌套对象，否则 select 不到 create.at / update.at
+      expect(select['update']).toEqual({
+        userId: true,
+        operate: true,
+        operateId: true,
+        reqId: true,
+        at: true,
+      });
     });
   });
 
@@ -113,7 +121,7 @@ describe('KeyService', () => {
         string,
         unknown
       >;
-      expect((options.select as string[]).includes('secret')).toBe(false);
+      expect((options.select as Record<string, unknown>)['secret']).toBeUndefined();
       expect(options.where).toEqual({ id: 3 });
     });
   });
@@ -129,7 +137,7 @@ describe('KeyService', () => {
         string,
         unknown
       >;
-      expect(options.select).toEqual(['id', 'secret']);
+      expect(options.select).toEqual({ id: true, secret: true });
     });
 
     it('密钥不存在时返回 null', async () => {

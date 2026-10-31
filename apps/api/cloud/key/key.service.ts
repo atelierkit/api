@@ -14,24 +14,21 @@ import { KeyEntity, KeyLogEntity } from './key.entity.js';
 /**
  * 对外可见的密钥字段
  *
- * 注：**不含 `secret`** —— 访问密钥 Secret 只在服务端内部使用（调用云厂商接口时取），
+ * 注 1：**不含 `secret`** —— 访问密钥 Secret 只在服务端内部使用（调用云厂商接口时取），
  * 任何接口都不下发浏览器，否则等于把云账号交出去
+ * 注 2：TypeORM v1 起只认对象写法，字符串数组形式（`['id', 'name']`）已在运行时直接抛错，
+ * 嵌入列（`create` / `update`）要展开成嵌套对象
  */
-const PUBLIC_SELECT = [
-  'id',
-  'name',
-  'description',
-  'provider',
-  'key',
-  'status',
-  'create.userId',
-  'create.at',
-  'update.userId',
-  'update.operate',
-  'update.operateId',
-  'update.reqId',
-  'update.at',
-] as FindOptionsSelect<KeyEntity>;
+const PUBLIC_SELECT = {
+  id: true,
+  name: true,
+  description: true,
+  provider: true,
+  key: true,
+  status: true,
+  create: { userId: true, at: true },
+  update: { userId: true, operate: true, operateId: true, reqId: true, at: true },
+} satisfies FindOptionsSelect<KeyEntity>;
 
 /** 云服务密钥服务 */
 @Injectable()
@@ -97,7 +94,7 @@ export class KeyService extends CommonService<KeyEntity, KeyLogEntity> {
   async secret(id: number) {
     /** 密钥 */
     const key = await this.keyRepository.findOne({
-      select: ['id', 'secret'] as FindOptionsSelect<KeyEntity>,
+      select: { id: true, secret: true } satisfies FindOptionsSelect<KeyEntity>,
       where: { id } as FindOptionsWhere<KeyEntity>,
     });
     return key?.secret ?? null;

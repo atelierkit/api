@@ -91,6 +91,24 @@
   7. 旧方法上的 `@UsePipes(new ValidationPipe())` 已去掉：全局 `APP_PIPE` 就是 `ValidationPipe({whitelist:true})`，方法级那个既多余，
      又不带 `whitelist`（两套口径并存容易误判）。
   8. 旧的 `@cloud` / `@kong` / `@tencent` 路径别名不迁移：本仓库只有 `@shared` 一个别名，模块间走相对路径（必须带 `.js`）。
+- **`apps/api/data`**：**新建**的行情数据模块（`DataModule`），照 almanac 桌面端的语义重实现（不是从旧私有 `marbleqi/api/src/data` 搬代码，
+  那里是 NestJS 11 单表模型，与本仓库 12 + ESM + vitest 不同）。目录：`data/source/`（baostock 裸 TCP 协议层）、
+  `data/sync/`（同步引擎：计划 + 4 同步器 + 台账）、`data/entities/`（7 张行情表实体 + DDL）、`data/`（gateway + 同步控制器 + 查询控制器）。
+  关键约定：
+  1. **消费段放 api 进程内 ⇒ 部署单实例**：`SyncService.onApplicationBootstrap` 把 `state=2` 的僵尸执行回滚成 `state=1` 再唤醒消费；
+     两个 api 实例同时启动会互抢对方正在跑的执行。docker compose 别加多副本。
+  2. **队列权威 = `sync_runs` 表**（活跃行就是队列），`shared/queue` 只当「唤醒后的串行宿主」，不存队列语义。
+  3. **协议层只实现 4 个接口**（`33/34` 日历、`45/46` 证券、`98/99` 按交易日日 K、`9C/9D` 按交易日复权因子），
+     `95/96` 按证券 K 线不需要（浏览页查库）。记录位/列名位：按证券类 6/9、按交易日类 4/5 —— 写错静默拿空串，不报错。
+  4. **枚举落库存名字不是序号**：`securities.type`（Stock/Index/Bond/Fund）、`market`（Shanghai/Shenzhen/Beijing）、
+     `status`（Listed/Delisted/Suspended）、`bars.trade_status`（Normal/Suspended/Unknown）。与 almanac 落库值逐字一致。
+  5. **两种「0 条」语义相反**：日 K 交易日返回 0 条 = 数据源未发布 ⇒ 停段不推台账；复权因子 0 条 = 当天无除权除息 ⇒ 照常推进。
+  6. **实体列名与 DDL 两半都要断言**（`entities/entities.spec.ts` 用 `getMetadataArgsStorage` 比对 databaseName），
+     单测走内存替身、真连 PG 才 `42703` 的坑。
+  7. **行情表 DDL 在 `data/entities/schema.ddl.sql`**，其中两条**部分唯一索引**（`IDX_sync_runs_plan` / `IDX_sync_runs_active`）
+     synchronize 生成不了，须手工执行；执行由用户自己做（遵守「不直接改库」纪律）。
+  8. **`bars` 4 个估值列（pe_ttm/pb_mrq/ps_ttm/pcf_ncf_ttm）必须 NULL 语义**：数据源空串表示无值，落 0 会让 PE/PB 全错且不报错。
+  9. **涨跌色走 web 端 theme 变量**，后端不下发颜色语义，只下发原始数值。
 - **`@shared` 路径别名**：根 `tsconfig.json` 的 `paths` 声明 `@shared` → `apps/api/shared/index.ts`、`@shared/*` → `apps/api/shared/*`。
   `shared/` **之外**的代码（`app.module.ts` 等）用 `import { SharedModule } from '@shared'` 或 `@shared/<目录>/<文件>.js`；
   `shared/` **内部**仍用相对路径（保持目录可整体搬迁，也不引入循环依赖风险）。

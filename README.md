@@ -17,6 +17,12 @@
   统一由 `@Allow('admin')` 声明所需角色，鉴权本身由全局 `TokenGuard` 完成。
 - **`apps/api/cloud`** —— 云服务模块（`CloudModule`），管理端接口：密钥（`/cloud/key`）、KONG 网关站点（`/cloud/kong`，含 `report/:id` 与 `plugin/:id` 两个探测接口）。
   密钥的 `secret` 只在服务端内部使用，清单与详情都不下发浏览器。
+- **`apps/api/data`** —— 行情数据模块（`DataModule`），本地 A 股行情（证券 / 交易日历 / 日 K / 复权因子）的同步与浏览：
+  写操作（`/data/sync/start`、`/data/sync/pause`）要求 `admin`；快照（`/data/sync/snapshot`）与三个只读查询
+  （`/data/security`、`/data/calendar`、`/data/bar`）登录即可。数据源是 baostock 裸 TCP 协议（`data/source/`），
+  **同步消费段跑在 api 进程内 ⇒ 部署必须单实例**（`onApplicationBootstrap` 的僵尸对账在多副本下会互抢正在跑的执行）。
+  行情表（`securities` / `trade_calendar` / `bars` / `adjust_factors` / `data_coverage` / `sync_tasks` / `sync_runs`）
+  落同库 public，DDL 见 `apps/api/data/entities/schema.ddl.sql`（含两条 synchronize 生成不了的**部分唯一索引**，须手工执行）。
 - **`libs/`** —— 可复用 NestJS 库（当前为空，待两服务出现共享代码时拆分）。
 
 ## 功能
@@ -232,6 +238,7 @@ apps/
 │   ├── auth/                # 访问控制模块（角色 / 用户 / 令牌）
 │   ├── cloud/               # 云服务模块（密钥 / KONG 网关站点）
 │   ├── tencent/             # 腾讯云模块（证书 / DNS / 域名 / CDN / 防火墙 / 轻量服务器）
+│   ├── data/                # 行情数据模块（同步 + 浏览；source/ 协议层、sync/ 同步引擎、entities/ 数据模型）
 │   ├── shared/              # 共用领域模块（user / token / redis / queue / monitor ...）
 │   └── test/                # e2e 测试
 └── worker/                  # 后台常驻服务（定时任务 / 队列消费）

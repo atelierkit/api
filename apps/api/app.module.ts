@@ -14,6 +14,7 @@ import {
 } from '@shared';
 import { AuthModule } from './auth/auth.module.js';
 import { CloudModule } from './cloud/cloud.module.js';
+import { DataModule } from './data/data.module.js';
 import { TencentModule } from './tencent/tencent.module.js';
 
 /** 主模块 */
@@ -85,6 +86,7 @@ import { TencentModule } from './tencent/tencent.module.js';
     AuthModule,
     CloudModule,
     TencentModule,
+    DataModule,
   ],
   providers: [
     // 注：全局守卫按注册顺序执行，初始化守卫必须排在令牌守卫之前

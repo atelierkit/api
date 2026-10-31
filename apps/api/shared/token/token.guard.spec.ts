@@ -154,6 +154,9 @@ describe('TokenGuard', () => {
     expect(params.controller).toBe('TestController');
     expect(params.action).toBe('index');
     expect(params.url).toBe('/user/index');
+    // 注：成功路径必须把真实用户ID写回 res.params，拦截器落库依赖它，
+    // 否则请求日志页「请求用户ID」恒显示「未登录」
+    expect(params.userId).toBe(5);
   });
 
   it('passport 路径直接放行，不查令牌', async () => {

@@ -77,7 +77,7 @@ export class TokenGuard implements CanActivate {
     /** 方法名 */
     const action = context.getHandler().name;
     /** 组装请求日志参数 */
-    let params = {
+    const params = {
       reqId,
       userId: 0,
       url: path,
@@ -99,7 +99,10 @@ export class TokenGuard implements CanActivate {
     const token = await this.tokenSrv.show(tokenKey);
     /** 用户ID */
     const userId = Number((token as { id: unknown }).id) || 0;
-    params = { ...params, userId };
+    // 注：必须原地写回同一对象（res['params'] 已指向它），不能 `params = { ...params, userId }`
+    // 重新赋值——那样 res['params'] 仍指向 userId: 0 的旧对象，拦截器落库的 userId 恒为 0，
+    // 请求日志页「请求用户ID」恒显示「未登录」
+    params.userId = userId;
     /** 异常过滤处理 */
     const send = async (result: string, status: number = 401) => {
       /** 请求日志ID */

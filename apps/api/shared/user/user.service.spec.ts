@@ -477,7 +477,7 @@ describe('UserService', () => {
   });
 
   describe('password', () => {
-    it('原密码错误时 401，同一密码时 400', async () => {
+    it('原密码错误时 400（不是 401，避免前端按登录过期把人踢出去），同一密码时 400', async () => {
       /** 被测服务与替身 */
       const { service, repository } = serviceOf();
       repository.findOne.mockResolvedValue({ ...USER, password: HASH });
@@ -486,7 +486,7 @@ describe('UserService', () => {
           oldPassword: 'wrong123',
           newPassword: 'new12345',
         }),
-      ).rejects.toBeInstanceOf(UnauthorizedException);
+      ).rejects.toBeInstanceOf(BadRequestException);
       await expect(
         service.password(1, {
           oldPassword: 'abc12345',

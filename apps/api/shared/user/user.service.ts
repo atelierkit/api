@@ -714,7 +714,9 @@ export class UserService extends CommonService<UserEntity, UserLogEntity> {
     }
     // 先校验原密码，避免攻击者拿登录态直接改密
     if (!(await verifyPassword(value.oldPassword, user.password))) {
-      throw new UnauthorizedException('原密码不正确！');
+      // 注：这里必须用 400 而不是 401 —— 登录态是有效的，错的只是表单里的原密码；
+      // 前端拦截器把非匿名请求的 401 一律当成「登录已过期」并踢回登录页，输错一次密码就被登出
+      throw new BadRequestException('原密码不正确！');
     }
     if (value.oldPassword === value.newPassword) {
       throw new BadRequestException('新密码不能与原密码相同！');

@@ -1,5 +1,5 @@
 // 外部依赖
-import { FindOperator, Repository } from 'typeorm';
+import { FindOperator, FindOptionsUtils, Repository } from 'typeorm';
 import { describe, expect, it, vi } from 'vitest';
 // 内部依赖
 import { OperateService } from '../../shared/operate/operate.service.js';
@@ -108,6 +108,8 @@ describe('KeyService', () => {
         reqId: true,
         at: true,
       });
+      // 注：直接用 TypeORM 自己的 v1 校验兜住写法 —— 替身单测最容易漏掉这类「只在真机才报」的错
+      expect(() => FindOptionsUtils.rejectStringArraySelect(options)).not.toThrow();
     });
   });
 
@@ -138,6 +140,7 @@ describe('KeyService', () => {
         unknown
       >;
       expect(options.select).toEqual({ id: true, secret: true });
+      expect(() => FindOptionsUtils.rejectStringArraySelect(options)).not.toThrow();
     });
 
     it('密钥不存在时返回 null', async () => {

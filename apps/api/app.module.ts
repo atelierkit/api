@@ -13,6 +13,7 @@ import {
   TokenGuard,
 } from '@shared';
 import { AuthModule } from './auth/auth.module.js';
+import { CloudModule } from './cloud/cloud.module.js';
 
 /** 主模块 */
 @Module({
@@ -81,6 +82,7 @@ import { AuthModule } from './auth/auth.module.js';
     }),
     SharedModule,
     AuthModule,
+    CloudModule,
   ],
   providers: [
     // 注：全局守卫按注册顺序执行，初始化守卫必须排在令牌守卫之前

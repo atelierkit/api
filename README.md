@@ -15,6 +15,8 @@
 - **`apps/api/shared`** —— API 服务的共用领域模块（用户 / 角色 / 令牌 / 配置 / 操作日志 / 请求日志 / 缓存 / 队列 / 邮件 / 异常监控），以 `SharedModule` 对外提供。
 - **`apps/api/auth`** —— 访问控制模块（`AuthModule`），只放**管理端**接口：角色（`/auth/role`）、用户（`/auth/user`）、令牌（`/auth/token`），
   统一由 `@Allow('admin')` 声明所需角色，鉴权本身由全局 `TokenGuard` 完成。
+- **`apps/api/cloud`** —— 云服务模块（`CloudModule`），管理端接口：密钥（`/cloud/key`）、KONG 网关站点（`/cloud/kong`，含 `report/:id` 与 `plugin/:id` 两个探测接口）。
+  密钥的 `secret` 只在服务端内部使用，清单与详情都不下发浏览器。
 - **`libs/`** —— 可复用 NestJS 库（当前为空，待两服务出现共享代码时拆分）。
 
 ## 功能
@@ -23,6 +25,7 @@
 - 服务器运维：系统状态、进程与服务管理
 - 下载中心：网盘分享链接解析、断点续传、后台常驻下载，任务进度 / 暂停 / 限速管理
 - 用户与权限：登录、角色、令牌与操作审计
+- 云服务：云厂商访问密钥管理（腾讯云 / 阿里云 / 亚马逊）、KONG 网关站点管理与连通性诊断
 - （规划中）家庭物联网：设备接入与状态管理
 
 ## 技术栈
@@ -225,6 +228,7 @@ apps/
 ├── api/                     # HTTP 接口服务
 │   ├── main.ts / app.module.ts / ...
 │   ├── auth/                # 访问控制模块（角色 / 用户 / 令牌）
+│   ├── cloud/               # 云服务模块（密钥 / KONG 网关站点）
 │   ├── shared/              # 共用领域模块（user / token / redis / queue / monitor ...）
 │   └── test/                # e2e 测试
 └── worker/                  # 后台常驻服务（定时任务 / 队列消费）

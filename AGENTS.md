@@ -29,6 +29,18 @@
   DTO 是 `shared/user/user.dto.ts` 的 `UserManageCreateDto` / `UserManageUpdateDto` —— 与个人端的 `UserUpdateDto` 刻意不同名，
   因为两者字段与权限边界完全不同（管理端含 `status` / `roles`）。管理端用户控制器类名叫 `AuthUserController`，
   避免与个人端 `UserController` 重名（`reqs.controller` 按类名记账，重名会让两类请求在日志里分不开）。
+- **`apps/api/cloud`**：自旧私有项目 `marbleqi/api` 的 `src/cloud`（密钥）与 `src/kong`（KONG 站点）**合并**迁入的云服务模块（`CloudModule`），
+  接口前缀统一为 `cloud/`（`/cloud/key`、`/cloud/kong`，另有两个探测接口 `report/:id`、`plugin/:id`），全部 `@Allow('admin')`。
+  三条与旧项目**刻意不同**的约定，别按旧代码「改回去」：
+  1. **密钥 secret 不出库**：`KeyService.index` / `show` 都走 `PUBLIC_SELECT`（不含 `secret`），详情也不回填；服务端内部要用时才调
+     `KeyService.secret(id)`。旧项目 `admin/key` 的详情会把 secret 整个下发浏览器，这里改掉了；因此前端编辑表单是「留空即不改」
+     （`KeyUpdateDto.secret` 可选，缺省表示保持原值）。
+  2. **DTO 按实体重写**：旧 `admin/key/key.dto.ts` 的字段是 `name / description / url / status`（从 kong 抄错的），配合
+     `ValidationPipe({whitelist:true})` 会把 `provider / key / secret` 剥掉，建密钥必然 500。现在是 `KeyCreateDto`（六字段必填）+
+     `KeyUpdateDto`（全可选）。`status` 一律用 `@IsBoolean`，不能用 `@IsNotEmpty`（它对 `false` 判空）。
+  3. **KONG 探测用 `fetch` 而非 `@nestjs/axios`**：旧项目注入 `HttpService`，本仓库不引 axios；`KongService.request` 用运行时自带的
+     `fetch`（非 2xx 不抛网络错），错误按 `HttpException` 原状态码透传，网关不可达转 502。
+  站点下的对象管理（旧 `src/kong/object` + web `/kong/:id/*`）**没有迁移**，`kongs` / `kongs_logs` 只存站点自身。
 - **`@shared` 路径别名**：根 `tsconfig.json` 的 `paths` 声明 `@shared` → `apps/api/shared/index.ts`、`@shared/*` → `apps/api/shared/*`。
   `shared/` **之外**的代码（`app.module.ts` 等）用 `import { SharedModule } from '@shared'` 或 `@shared/<目录>/<文件>.js`；
   `shared/` **内部**仍用相对路径（保持目录可整体搬迁，也不引入循环依赖风险）。

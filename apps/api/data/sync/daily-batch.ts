@@ -19,11 +19,32 @@ export interface DailyBatchDeps {
   calendarRange(from: string, to: string): Promise<{ date: string; isOpen: boolean }[]>;
   /** 数据源客户端 */
   client: BaostockClient;
+  /** 告警出口（条数骤降这类「不阻塞但要留痕」的情况走这里） */
+  warn?: (message: string) => void;
+  /**
+   * 取消检查（每天走完之后问一次）；缺省 = 不检查
+   *
+   * ⚠ 只在「一天完整走完、台账已落库」之后问：中途停会让当天写了一半的数据失去台账保护。
+   */
+  shouldAbort?: () => Promise<boolean>;
+  /**
+   * 重算该数据集在库里的总行数；缺省 = 按本次写入条数累加
+   *
+   * ⚠ 累加口径有洞：`upsert` 返回的是「提交的行数」而不是「新增的行数」，重跑同一区间
+   *    （显式指定 from/to）会把同一批行重复计入。有它就以库为准。
+   */
+  countRows?: () => Promise<number>;
 }
 
 /** 一次同步的执行结果 */
 export type SyncResult =
-  | { ok: true; rowsWritten: number; stage: string }
+  | {
+      ok: true;
+      rowsWritten: number;
+      stage: string;
+      /** 是否因被暂停而提前收尾（沿用成功语义，但台账停在断点上） */
+      aborted?: true;
+    }
   | { ok: false; code: string; message: string };
 
 /** 单条记录映射写入（由子类实现） */
@@ -33,7 +54,7 @@ type Writer = (date: string, records: BaostockRecord[]) => Promise<number>;
  * 「按交易日」同步器的公共流程
  *
  * 流程骨架：读台账 → 定起点与上界（不可变量）→ 取区间内交易日清单 → 逐日串行：
- * 请求 → 校验 → 映射写入 → 当天结束即推进台账 → 报确定进度。
+ * 请求 → 校验 → 映射写入 → 当天结束即推进台账 → 报确定进度 → 问一次是否该停。
  *
  * ⚠ 逐日提交是断点续传的唯一保证；循环变量是请求时算好的清单，循环内不改写；
  * 取消令牌只在「一天完整走完之后」检查。
@@ -126,6 +147,7 @@ export async function runDailyBatch(
 
     if (records.length === 0 && !options.emptyResponseIsNormal) {
       // 数据源未发布该日 ⇒ 停本段、台账不动
+      currentWatermark = await refreshRows(currentWatermark, deps);
       return {
         ok: true,
         rowsWritten: writtenTotal,
@@ -137,13 +159,16 @@ export async function runDailyBatch(
     if (records.length > 0) {
       if (previousCount === null) {
         ensureRequiredFields(target, day, records[0], requiredFields);
-      }
-      if (
-        options.warnOnCountDrop &&
-        previousCount !== null &&
+      } else if (
+        options.warnOnCountDrop === true &&
         records.length < (previousCount * 7) / 10
       ) {
-        // 条数骤降哨兵：只告警不阻塞
+        // 条数骤降哨兵：只告警不阻塞（停段会掩盖「数据源发布不全」与「列名错位丢行」的区别，
+        // 但完全不提示就等于没有哨兵）
+        deps.warn?.(
+          `${options.progressStage}：${day} 只返回 ${records.length} 条，前一交易日为 ${previousCount} 条 —— ` +
+            '降幅超过 30%，请核对数据源是否发布完整或列名是否错位。',
+        );
       }
       writtenToday = await write(day, records);
       writtenTotal += writtenToday;
@@ -162,7 +187,20 @@ export async function runDailyBatch(
       total: tradeDays.length,
       fact: { date: day, page: null, count: records.length, elapsedMs: dayElapsed, label: null },
     });
+
+    // 取消检查放在「一天完整走完」之后：此时台账已推进，下次从下一天继续
+    if (deps.shouldAbort !== undefined && (await deps.shouldAbort())) {
+      currentWatermark = await refreshRows(currentWatermark, deps);
+      return {
+        ok: true,
+        rowsWritten: writtenTotal,
+        stage: `已暂停，断点停在 ${currentWatermark.lastDate ?? '（无）'}`,
+        aborted: true,
+      };
+    }
   }
+
+  currentWatermark = await refreshRows(currentWatermark, deps);
 
   if (writtenTotal === 0) {
     return {
@@ -173,6 +211,19 @@ export async function runDailyBatch(
   }
 
   return { ok: true, rowsWritten: writtenTotal, stage: '完成' };
+}
+
+/** 以库为准校正台账的记录数（没有 countRows 就原样返回） */
+async function refreshRows(
+  watermark: Watermark,
+  deps: DailyBatchDeps,
+): Promise<Watermark> {
+  if (deps.countRows === undefined) {
+    return watermark;
+  }
+  const next = { ...watermark, rows: await deps.countRows() };
+  await deps.saveWatermark(next);
+  return next;
 }
 
 /** 在第一条记录上校验响应列名齐全 */

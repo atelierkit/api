@@ -317,4 +317,133 @@ describe('runDailyBatch 按交易日骨架', () => {
     const wm = watermarks.get('bar.byDate/bar')!;
     expect(wm.lastDate).toBe('2026-01-06');
   });
+
+  it('shouldAbort 为真 ⇒ 在「一天走完」处停止，台账停在当天（暂停真的生效）', async () => {
+    const calendarDays = ['2026-01-05', '2026-01-06', '2026-01-07'].map((date) => ({
+      date,
+      isOpen: true,
+    }));
+    const recordsByDate = new Map<string, BaostockRecord[]>([
+      ['2026-01-05', [rec('sh.600000')]],
+      ['2026-01-06', [rec('sh.600000')]],
+      ['2026-01-07', [rec('sh.600000')]],
+    ]);
+    const { deps, watermarks } = makeDeps({ calendarDays, recordsByDate });
+    // 第一天结束后还不停，第二天结束后停
+    let asked = 0;
+    deps.shouldAbort = async () => {
+      asked++;
+      return asked >= 2;
+    };
+
+    const result = await runDailyBatch(
+      SYNC_TARGET.BAR_BY_DATE,
+      'bar',
+      '2026-01-05',
+      '2026-01-07',
+      deps,
+      (date) => ({ messageType: '98', bodyFields: ['x', 'anonymous', date], recordIndex: 4, fieldIndex: 5 }),
+      ['code'],
+      async (_date, records) => records.length,
+      { progressStage: '同步全市场日线' },
+      { report: () => undefined },
+    );
+
+    expect(result.ok).toBe(true);
+    if (result.ok) {
+      expect(result.aborted).toBe(true);
+      expect(result.stage).toContain('已暂停');
+      // 已写的两天照常计入
+      expect(result.rowsWritten).toBe(2);
+    }
+    const wm = watermarks.get('bar.byDate/bar')!;
+    expect(wm.lastDate).toBe('2026-01-06'); // 停在第二天，第三天没拉
+  });
+
+  it('countRows 存在 ⇒ 台账记录数以库为准（修正重复提交导致的虚高）', async () => {
+    const calendarDays = ['2026-01-05'].map((date) => ({ date, isOpen: true }));
+    const recordsByDate = new Map<string, BaostockRecord[]>([
+      ['2026-01-05', [rec('sh.600000')]],
+    ]);
+    const { deps, watermarks } = makeDeps({ calendarDays, recordsByDate });
+    deps.countRows = async () => 25_000_000;
+
+    const result = await runDailyBatch(
+      SYNC_TARGET.BAR_BY_DATE,
+      'bar',
+      '2026-01-05',
+      '2026-01-05',
+      deps,
+      (date) => ({ messageType: '98', bodyFields: ['x', 'anonymous', date], recordIndex: 4, fieldIndex: 5 }),
+      ['code'],
+      async (_date, records) => records.length,
+      { progressStage: '同步全市场日线' },
+      { report: () => undefined },
+    );
+
+    expect(result.ok).toBe(true);
+    expect(watermarks.get('bar.byDate/bar')!.rows).toBe(25_000_000);
+  });
+
+  it('条数骤降哨兵：降幅超过 30% 时调 warn（不再是一个空块）', async () => {
+    const calendarDays = ['2026-01-05', '2026-01-06'].map((date) => ({ date, isOpen: true }));
+    const many = Array.from({ length: 10 }, (_unused, index) => rec(`sh.60000${index}`));
+    const few = Array.from({ length: 3 }, (_unused, index) => rec(`sh.60000${index}`));
+    const recordsByDate = new Map<string, BaostockRecord[]>([
+      ['2026-01-05', many],
+      ['2026-01-06', few],
+    ]);
+    const { deps } = makeDeps({ calendarDays, recordsByDate });
+    const warnings: string[] = [];
+    deps.warn = (message: string) => {
+      warnings.push(message);
+    };
+
+    const result = await runDailyBatch(
+      SYNC_TARGET.BAR_BY_DATE,
+      'bar',
+      '2026-01-05',
+      '2026-01-06',
+      deps,
+      (date) => ({ messageType: '98', bodyFields: ['x', 'anonymous', date], recordIndex: 4, fieldIndex: 5 }),
+      ['code'],
+      async (_date, records) => records.length,
+      { progressStage: '同步全市场日线', warnOnCountDrop: true },
+      { report: () => undefined },
+    );
+
+    expect(result.ok).toBe(true);
+    expect(warnings).toHaveLength(1);
+    expect(warnings[0]).toContain('2026-01-06');
+    expect(warnings[0]).toContain('30%');
+  });
+
+  it('未开启 warnOnCountDrop 时条数骤降不告警', async () => {
+    const calendarDays = ['2026-01-05', '2026-01-06'].map((date) => ({ date, isOpen: true }));
+    const many = Array.from({ length: 10 }, (_unused, index) => rec(`sh.60000${index}`));
+    const recordsByDate = new Map<string, BaostockRecord[]>([
+      ['2026-01-05', many],
+      ['2026-01-06', [rec('sh.600009')]],
+    ]);
+    const { deps } = makeDeps({ calendarDays, recordsByDate });
+    const warnings: string[] = [];
+    deps.warn = (message: string) => {
+      warnings.push(message);
+    };
+
+    await runDailyBatch(
+      SYNC_TARGET.BAR_BY_DATE,
+      'bar',
+      '2026-01-05',
+      '2026-01-06',
+      deps,
+      (date) => ({ messageType: '98', bodyFields: ['x', 'anonymous', date], recordIndex: 4, fieldIndex: 5 }),
+      ['code'],
+      async (_date, records) => records.length,
+      { progressStage: '同步全市场日线' },
+      { report: () => undefined },
+    );
+
+    expect(warnings).toHaveLength(0);
+  });
 });

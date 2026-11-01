@@ -5,6 +5,8 @@ import { FIELD, SECURITY_TYPE, SECURITY_STATUS } from '../source/baostock.schema
 import type { ProgressSink } from './progress.js';
 import type { DailyBatchDeps } from './daily-batch.js';
 import type { SyncResult } from './daily-batch.js';
+import { COVERAGE_SCOPE, WHOLE_MARKET } from './sync.types.js';
+import type { Watermark } from './watermark.js';
 
 /** 证券同步器仓储 */
 export interface SecurityStore {
@@ -22,6 +24,20 @@ export interface SecurityRow {
   status: string;
 }
 
+/** 证券同步器依赖（整份快照 + 台账） */
+export interface SecuritySyncerDeps {
+  client: DailyBatchDeps['client'];
+  store: SecurityStore;
+  /** 写台账（整份快照：`lastDate` 记本次同步日，语义是「这份快照是哪天的」） */
+  saveWatermark(watermark: Watermark): Promise<void>;
+  /** 今天（业务时区） */
+  today(): string;
+  /** 重算 securities 总行数；缺省按本次提交条数累计 */
+  countSecurities?: () => Promise<number>;
+  /** 取消检查（每页结束问一次）；缺省 = 不检查 */
+  shouldAbort?: () => Promise<boolean>;
+}
+
 const PAGE_SIZE = 500;
 
 /**
@@ -29,9 +45,11 @@ const PAGE_SIZE = 500;
  *
  * ⚠ 退市证券必须写进库（回测按历史时点判定），不做「只保留上市证券」的过滤。
  * 类型/状态/交易所落库为枚举名（与 almanac 一致，可读）。
+ * ⚠ 必须写台账：这张卡片的「覆盖至 / 记录数」只读台账，不读 securities 表 ——
+ *   不写就会永远显示空，即使库里有几千条。
  */
 export async function syncSecurities(
-  deps: Pick<DailyBatchDeps, 'client'> & { store: SecurityStore },
+  deps: SecuritySyncerDeps,
   progress: ProgressSink,
 ): Promise<SyncResult> {
   const stage = '拉取证券基础信息';
@@ -61,6 +79,16 @@ export async function syncSecurities(
       fact: { date: null, page, count: rows.length, elapsedMs: 0, label: null },
     });
 
+    if (deps.shouldAbort !== undefined && (await deps.shouldAbort())) {
+      await writeWatermark(deps, fetched);
+      return {
+        ok: true,
+        rowsWritten: writtenTotal,
+        stage: `已暂停（已拉取 ${fetched} 条）`,
+        aborted: true,
+      };
+    }
+
     if (records.length < PAGE_SIZE) {
       break;
     }
@@ -75,7 +103,26 @@ export async function syncSecurities(
     };
   }
 
+  await writeWatermark(deps, fetched);
   return { ok: true, rowsWritten: writtenTotal, stage: '完成' };
+}
+
+/** 写证券台账：快照日期 + 以库为准的记录数 */
+async function writeWatermark(
+  deps: SecuritySyncerDeps,
+  fetched: number,
+): Promise<void> {
+  const rows =
+    deps.countSecurities === undefined
+      ? fetched
+      : await deps.countSecurities();
+  await deps.saveWatermark({
+    scope: COVERAGE_SCOPE.SECURITY,
+    dataset: WHOLE_MARKET,
+    parameters: '',
+    lastDate: deps.today(),
+    rows,
+  });
 }
 
 /** 记录 → securities 行；代码缺失时为 null */

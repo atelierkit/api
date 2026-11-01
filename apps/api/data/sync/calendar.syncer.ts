@@ -86,7 +86,6 @@ export async function syncCalendar(
 
     const covered = fetchedDates.reduce((a, b) => (a > b ? a : b), fetchedDates[0] ?? start);
     watermark = advanceWatermark(watermark, covered, 0);
-    watermark = { ...watermark, rows: await deps.store.countCalendar() };
     await deps.saveWatermark(watermark);
 
     progress.report({
@@ -109,6 +108,10 @@ export async function syncCalendar(
       message: `数据源在 ${start} ~ ${upper} 区间没有返回任何日历记录。`,
     };
   }
+
+  // 记录数以库为准，收尾算一次即可（逐页 COUNT 是纯浪费：日历页数不多、但每条都要全表扫一遍）
+  watermark = { ...watermark, rows: await deps.store.countCalendar() };
+  await deps.saveWatermark(watermark);
 
   // 收敛分母到实得天数，让进度条落在 100%
   progress.report({

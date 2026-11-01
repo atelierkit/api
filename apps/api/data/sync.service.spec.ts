@@ -151,12 +151,16 @@ describe('SyncService', () => {
     };
     const runRepo = {
       update: vi.fn(async () => ({ affected: 1 })),
+      findOneBy: vi.fn(async () => ({ id: '10', state: SYNC_STATE.RUNNING })),
     };
     const securityRepo = {
       upsert: vi.fn(async () => ({ identifiers: [{ code: 'sh.600000' }] })),
+      count: vi.fn(async () => 1),
     };
+    // 证券同步器会写台账（卡片上的「覆盖至 / 记录数」只读台账）
+    const coverageRepo = { upsert: vi.fn(async () => ({ identifiers: [{}] })) };
 
-    const { svc, gateway } = makeService({ taskRepo, runRepo, securityRepo });
+    const { svc, gateway } = makeService({ taskRepo, runRepo, securityRepo, coverageRepo });
 
     // 替换真实的 BaostockClient 为 mock（避免真连网）
     (svc as unknown as { client: unknown }).client = {
@@ -188,7 +192,7 @@ describe('SyncService', () => {
 
     // 最终写终态（成功）
     expect(runRepo.update).toHaveBeenCalledWith(
-      { id: '10' },
+      { id: '10', state: SYNC_STATE.RUNNING },
       expect.objectContaining({ state: SYNC_STATE.SUCCEEDED }),
     );
     expect(gateway.broadcast).toHaveBeenCalledWith('finish');
@@ -196,7 +200,10 @@ describe('SyncService', () => {
 
   it('executeRun 任务不存在时写跳过终态', async () => {
     const taskRepo = { findOneBy: vi.fn(async () => null) };
-    const runRepo = { update: vi.fn(async () => ({ affected: 1 })) };
+    const runRepo = {
+      update: vi.fn(async () => ({ affected: 1 })),
+      findOneBy: vi.fn(async () => ({ id: '10', state: SYNC_STATE.RUNNING })),
+    };
 
     const { svc } = makeService({ taskRepo, runRepo });
 
@@ -213,14 +220,17 @@ describe('SyncService', () => {
     await (svc as unknown as { executeRun: (r: unknown) => Promise<void> }).executeRun(run);
 
     expect(runRepo.update).toHaveBeenCalledWith(
-      { id: '10' },
+      { id: '10', state: SYNC_STATE.RUNNING },
       expect.objectContaining({ state: SYNC_STATE.SKIPPED }),
     );
   });
 
   it('executeRun 处理 Calendar 目标：走日历同步器', async () => {
     const taskRepo = { findOneBy: vi.fn(async () => ({ id: '1' })) };
-    const runRepo = { update: vi.fn(async () => ({ affected: 1 })) };
+    const runRepo = {
+      update: vi.fn(async () => ({ affected: 1 })),
+      findOneBy: vi.fn(async () => ({ id: '11', state: SYNC_STATE.RUNNING })),
+    };
     const coverageRepo = {
       findOneBy: vi.fn(async () => null),
       upsert: vi.fn(async () => ({ identifiers: [{}] })),
@@ -253,14 +263,17 @@ describe('SyncService', () => {
 
     await (svc as unknown as { executeRun: (r: unknown) => Promise<void> }).executeRun(run);
     expect(runRepo.update).toHaveBeenCalledWith(
-      { id: '11' },
+      { id: '11', state: SYNC_STATE.RUNNING },
       expect.objectContaining({ state: SYNC_STATE.SUCCEEDED }),
     );
   });
 
   it('executeRun 处理 BarByDate 目标：走按交易日日 K 同步器', async () => {
     const taskRepo = { findOneBy: vi.fn(async () => ({ id: '1' })) };
-    const runRepo = { update: vi.fn(async () => ({ affected: 1 })) };
+    const runRepo = {
+      update: vi.fn(async () => ({ affected: 1 })),
+      findOneBy: vi.fn(async () => ({ id: '12', state: SYNC_STATE.RUNNING })),
+    };
     const coverageRepo = {
       findOneBy: vi.fn(async () => null),
       upsert: vi.fn(async () => ({ identifiers: [{}] })),
@@ -281,6 +294,7 @@ describe('SyncService', () => {
     };
     const barRepo = {
       upsert: vi.fn(async () => ({ identifiers: [{}] })),
+      count: vi.fn(async () => 1),
     };
 
     const { svc } = makeService({ taskRepo, runRepo, coverageRepo, calendarRepo });
@@ -324,14 +338,17 @@ describe('SyncService', () => {
 
     await (svc as unknown as { executeRun: (r: unknown) => Promise<void> }).executeRun(run);
     expect(runRepo.update).toHaveBeenCalledWith(
-      { id: '12' },
+      { id: '12', state: SYNC_STATE.RUNNING },
       expect.objectContaining({ state: SYNC_STATE.SUCCEEDED }),
     );
   });
 
   it('executeRun 处理 AdjustFactor 目标：走复权因子同步器', async () => {
     const taskRepo = { findOneBy: vi.fn(async () => ({ id: '1' })) };
-    const runRepo = { update: vi.fn(async () => ({ affected: 1 })) };
+    const runRepo = {
+      update: vi.fn(async () => ({ affected: 1 })),
+      findOneBy: vi.fn(async () => ({ id: '13', state: SYNC_STATE.RUNNING })),
+    };
     const coverageRepo = {
       findOneBy: vi.fn(async () => null),
       upsert: vi.fn(async () => ({ identifiers: [{}] })),
@@ -350,6 +367,7 @@ describe('SyncService', () => {
     };
     const factorRepo = {
       upsert: vi.fn(async () => ({ identifiers: [{}] })),
+      count: vi.fn(async () => 1),
     };
 
     const { svc } = makeService({ taskRepo, runRepo, coverageRepo, calendarRepo });
@@ -379,7 +397,7 @@ describe('SyncService', () => {
 
     await (svc as unknown as { executeRun: (r: unknown) => Promise<void> }).executeRun(run);
     expect(runRepo.update).toHaveBeenCalledWith(
-      { id: '13' },
+      { id: '13', state: SYNC_STATE.RUNNING },
       expect.objectContaining({ state: SYNC_STATE.SUCCEEDED }),
     );
   });
@@ -421,6 +439,131 @@ describe('SyncService', () => {
     (svc as unknown as { client: unknown }).client = client;
     svc.onModuleDestroy();
     expect(client.logout).toHaveBeenCalled();
+  });
+
+  it('收尾时状态已被改成「暂停」⇒ 不覆盖成成功、也不广播 finish', async () => {
+    const taskRepo = { findOneBy: vi.fn(async () => ({ id: '1' })) };
+    // 条件更新（WHERE state = RUNNING）命中 0 行 = 已被暂停
+    const runRepo = {
+      update: vi.fn(async () => ({ affected: 0 })),
+      findOneBy: vi.fn(async () => ({ id: '11', state: SYNC_STATE.PAUSED })),
+    };
+    const coverageRepo = {
+      findOneBy: vi.fn(async () => null),
+      upsert: vi.fn(async () => ({ identifiers: [{}] })),
+    };
+    const calendarRepo = {
+      count: vi.fn(async () => 2),
+      upsert: vi.fn(async () => ({ identifiers: [{}, {}] })),
+    };
+
+    const { svc, gateway } = makeService({ taskRepo, runRepo, coverageRepo, calendarRepo });
+    (svc as unknown as { client: unknown }).client = {
+      query: vi.fn(async () => [
+        new Map([
+          ['calendar_date', '2026-01-05'],
+          ['is_trading_day', '1'],
+        ]),
+      ]),
+      logout: vi.fn(async () => undefined),
+    };
+
+    const run = {
+      id: '11',
+      taskId: '1',
+      target: SYNC_TARGET.CALENDAR,
+      code: '',
+      fromDate: null,
+      toDate: null,
+      state: SYNC_STATE.RUNNING,
+    };
+
+    await (svc as unknown as { executeRun: (r: unknown) => Promise<void> }).executeRun(run);
+
+    // 终态写入带「必须还是执行中」的条件
+    expect(runRepo.update).toHaveBeenCalledWith(
+      { id: '11', state: SYNC_STATE.RUNNING },
+      expect.objectContaining({ state: SYNC_STATE.SUCCEEDED }),
+    );
+    // 0 行被改 ⇒ 不广播，避免界面把「暂停」显示成「跑完了」
+    expect(gateway.broadcast).not.toHaveBeenCalledWith('finish');
+  });
+
+  it('执行中检测到已暂停 ⇒ 在日边界提前收尾（阶段文案带「已暂停」）', async () => {
+    const taskRepo = { findOneBy: vi.fn(async () => ({ id: '1' })) };
+    const runRepo = {
+      update: vi.fn(async () => ({ affected: 0 })),
+      // 第一次（进度）之后就被暂停：所有回读都返回 PAUSED
+      findOneBy: vi.fn(async () => ({ id: '12', state: SYNC_STATE.PAUSED })),
+    };
+    const coverageRepo = {
+      findOneBy: vi.fn(async () => null),
+      upsert: vi.fn(async () => ({ identifiers: [{}] })),
+    };
+    const calendarRepo = {
+      createQueryBuilder: vi.fn(() => {
+        const qb = {
+          select: vi.fn(() => qb),
+          getRawOne: vi.fn(async () => ({ max: '2026-01-06' })),
+          where: vi.fn(() => qb),
+          orderBy: vi.fn(() => qb),
+          getMany: vi.fn(async () => [
+            { calendarDate: '2026-01-05', isOpen: true },
+            { calendarDate: '2026-01-06', isOpen: true },
+          ]),
+        };
+        return qb;
+      }),
+    };
+    const barRepo = {
+      upsert: vi.fn(async () => ({ identifiers: [{}] })),
+      count: vi.fn(async () => 1),
+    };
+
+    const { svc } = makeService({ taskRepo, runRepo, coverageRepo, calendarRepo });
+    const query = vi.fn(async () => [
+      new Map([
+        ['code', 'sh.600000'],
+        ['date', '2026-01-05'],
+        ['open', '10'],
+        ['high', '11'],
+        ['low', '9'],
+        ['close', '10.5'],
+        ['preclose', '10.2'],
+        ['volume', '100'],
+        ['amount', '1000'],
+        ['adjustflag', '3'],
+        ['turn', '0.5'],
+        ['tradestatus', '1'],
+        ['pctChg', '0.3'],
+        ['peTTM', ''],
+        ['pbMRQ', '1.2'],
+        ['psTTM', '2'],
+        ['pcfNcfTTM', ''],
+        ['isST', '0'],
+      ]),
+    ]);
+    (svc as unknown as { client: unknown }).client = { query, logout: vi.fn(async () => undefined) };
+    (svc as unknown as { barRepo: unknown }).barRepo = barRepo;
+
+    const run = {
+      id: '12',
+      taskId: '1',
+      target: SYNC_TARGET.BAR_BY_DATE,
+      code: 'bar',
+      fromDate: '2026-01-05',
+      toDate: '2026-01-06',
+      state: SYNC_STATE.RUNNING,
+    };
+
+    await (svc as unknown as { executeRun: (r: unknown) => Promise<void> }).executeRun(run);
+
+    // 两天都该被拉到 → 实际只拉了一天就停
+    expect(query).toHaveBeenCalledTimes(1);
+    expect(runRepo.update).toHaveBeenCalledWith(
+      { id: '12', state: SYNC_STATE.RUNNING },
+      expect.objectContaining({ stage: expect.stringContaining('已暂停') }),
+    );
   });
 
   it('claimNext 按 RETURNING 的 id 回查完整实体（避免蛇形列名丢失 taskId）', async () => {

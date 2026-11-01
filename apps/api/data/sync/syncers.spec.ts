@@ -12,6 +12,25 @@ function rec(entries: Record<string, string>): BaostockRecord {
   return new Map(Object.entries(entries));
 }
 
+/** 构造证券同步器依赖（台账写入落到内存，便于断言） */
+function securityDeps(
+  client: unknown,
+  store: unknown,
+  extra: Record<string, unknown> = {},
+): { deps: never; saved: { value?: { lastDate: string | null; rows: number } } } {
+  const saved: { value?: { lastDate: string | null; rows: number } } = {};
+  const deps = {
+    client,
+    store,
+    saveWatermark: async (wm: { lastDate: string | null; rows: number }) => {
+      saved.value = wm;
+    },
+    today: () => '2026-11-01',
+    ...extra,
+  } as never;
+  return { deps, saved };
+}
+
 describe('security.syncer', () => {
   it('映射 type/market/status 为落库枚举名，逐页 upsert', async () => {
     const client = {
@@ -23,10 +42,8 @@ describe('security.syncer', () => {
     const written: unknown[][] = [];
     const store = { upsertSecurities: async (rows: unknown[]) => { written.push(rows); return rows.length; } };
 
-    const result = await syncSecurities(
-      { client: client as never, store },
-      { report: () => undefined },
-    );
+    const { deps, saved } = securityDeps(client, store);
+    const result = await syncSecurities(deps, { report: () => undefined });
 
     expect(result.ok).toBe(true);
     if (result.ok) {
@@ -39,6 +56,40 @@ describe('security.syncer', () => {
     const second = written[0][1] as Record<string, unknown>;
     expect(second.type).toBe('Index');
     expect(second.market).toBe('Shanghai');
+    // 台账必须写：日期记为同步日，条数按提交量
+    expect(saved.value).toMatchObject({ lastDate: '2026-11-01', rows: 2 });
+  });
+
+  it('有 countSecurities 时台账条数以库为准（不受重复提交影响）', async () => {
+    const client = {
+      query: (async () => [
+        rec({ code: 'sh.600000', code_name: '浦发银行', type: '1', ipoDate: '', outDate: '', status: '1' }),
+      ]) as never,
+    };
+    const store = { upsertSecurities: async () => 1 };
+
+    const { deps, saved } = securityDeps(client, store, { countSecurities: async () => 5000 });
+    await syncSecurities(deps, { report: () => undefined });
+
+    expect(saved.value?.rows).toBe(5000);
+  });
+
+  it('shouldAbort 为真 ⇒ 逐页中止并写台账（不丢已拉到的部分）', async () => {
+    const page = [
+      rec({ code: 'sh.600000', code_name: '浦发银行', type: '1', ipoDate: '', outDate: '', status: '1' }),
+    ];
+    const client = { query: (async () => page) as never };
+    const store = { upsertSecurities: async (rows: unknown[]) => rows.length };
+
+    const { deps, saved } = securityDeps(client, store, { shouldAbort: async () => true });
+    const result = await syncSecurities(deps, { report: () => undefined });
+
+    expect(result.ok).toBe(true);
+    if (result.ok) {
+      expect(result.stage).toContain('已暂停');
+      expect(result.aborted).toBe(true);
+    }
+    expect(saved.value).toMatchObject({ lastDate: '2026-11-01', rows: 1 });
   });
 
   it('退市证券不丢（status=0 → Delisted）', async () => {
@@ -50,7 +101,8 @@ describe('security.syncer', () => {
     const written: unknown[][] = [];
     const store = { upsertSecurities: async (rows: unknown[]) => { written.push(rows); return rows.length; } };
 
-    await syncSecurities({ client: client as never, store }, { report: () => undefined });
+    const { deps } = securityDeps(client, store);
+    await syncSecurities(deps, { report: () => undefined });
 
     const row = written[0][0] as Record<string, unknown>;
     expect(row.status).toBe('Delisted');
@@ -69,7 +121,8 @@ describe('security.syncer', () => {
     const written: unknown[][] = [];
     const store = { upsertSecurities: async (rows: unknown[]) => { written.push(rows); return rows.length; } };
 
-    await syncSecurities({ client: client as never, store }, { report: () => undefined });
+    const { deps } = securityDeps(client, store);
+    await syncSecurities(deps, { report: () => undefined });
 
     const rows = written[0] as Record<string, unknown>[];
     expect(rows[0].type).toBe('Bond');
@@ -81,11 +134,13 @@ describe('security.syncer', () => {
     expect(rows[3].market).toBe('Unknown'); // xx. 前缀 → Unknown
   });
 
-  it('数据源返回空 ⇒ 明确失败', async () => {
+  it('数据源返回空 ⇒ 明确失败（且不写台账）', async () => {
     const client = { query: (async () => [] as BaostockRecord[]) as never };
     const store = { upsertSecurities: async () => 0 };
-    const result = await syncSecurities({ client: client as never, store }, { report: () => undefined });
+    const { deps, saved } = securityDeps(client, store);
+    const result = await syncSecurities(deps, { report: () => undefined });
     expect(result.ok).toBe(false);
+    expect(saved.value).toBeUndefined();
   });
 });
 

@@ -52,6 +52,8 @@ export class SyncService implements OnApplicationBootstrap, OnModuleDestroy {
   private wakeRequested = false;
   /** 取消令牌（停机用） */
   private stopping = false;
+  /** 进度写库的串行尾（见 makeProgress 注释） */
+  private progressTail: Promise<void> = Promise.resolve();
 
   private readonly client = new BaostockClient();
 
@@ -168,7 +170,17 @@ export class SyncService implements OnApplicationBootstrap, OnModuleDestroy {
       switch (target) {
         case SYNC_TARGET.SECURITY:
           result = await syncSecurities(
-            { client: this.client, store: { upsertSecurities: (rows) => this.upsertSecurities(rows as SecurityEntity[]) } },
+            {
+              client: this.client,
+              store: {
+                upsertSecurities: (rows) =>
+                  this.upsertSecurities(rows as SecurityEntity[]),
+              },
+              saveWatermark: (wm) => this.saveWatermark(wm),
+              today: () => this.today(),
+              countSecurities: () => this.securityRepo.count(),
+              shouldAbort: () => this.isAborted(run.id),
+            },
             progress,
           );
           break;
@@ -195,7 +207,7 @@ export class SyncService implements OnApplicationBootstrap, OnModuleDestroy {
             from,
             to,
             {
-              ...this.makeDailyDeps(),
+              ...this.makeDailyDeps(run.id, () => this.barRepo.count()),
               store: { upsertBars: (rows) => this.upsertBars(rows as BarEntity[]) },
             },
             progress,
@@ -207,7 +219,7 @@ export class SyncService implements OnApplicationBootstrap, OnModuleDestroy {
             from,
             to,
             {
-              ...this.makeDailyDeps(),
+              ...this.makeDailyDeps(run.id, () => this.factorRepo.count()),
               store: { upsertFactors: (rows) => this.upsertFactors(rows as AdjustFactorEntity[]) },
             },
             progress,
@@ -230,11 +242,20 @@ export class SyncService implements OnApplicationBootstrap, OnModuleDestroy {
     }
   }
 
-  private makeDailyDeps() {
+  /**
+   * 按交易日同步器的依赖装配
+   *
+   * @param runId 当前执行 Id（取消检查要用它回读状态）
+   * @param countRows 该数据集的总行数（用于校正台账记录数）
+   */
+  private makeDailyDeps(runId: string, countRows: () => Promise<number>) {
     return {
       client: this.client,
       findWatermark: (scope: string, dataset: string) => this.findWatermark(scope, dataset),
       saveWatermark: (wm: Watermark) => this.saveWatermark(wm),
+      countRows,
+      shouldAbort: () => this.isAborted(runId),
+      warn: (message: string) => this.logger.warn(message),
       latestCalendarDate: async () => {
         const latest = await this.calendarRepo
           .createQueryBuilder('c')
@@ -253,25 +274,52 @@ export class SyncService implements OnApplicationBootstrap, OnModuleDestroy {
     };
   }
 
-  /** 进度上报（写回 sync_runs，节流由 report 频率决定） */
+  /**
+   * 进度上报（写回 sync_runs）
+   *
+   * ⚠ 必须串行：`report` 会被同步器连续调用（一页一次 / 一天一次），并发发出去的 UPDATE
+   *    到达顺序无保证，进度条会「回退」。这里挂到一条 Promise 链上，顺序与调用顺序一致。
+   */
   private makeProgress(runId: string): { report: (p: ProgressReport) => void } {
     return {
       report: (p) => {
-        void this.runRepo
-          .update(
-            { id: runId, state: SYNC_STATE.RUNNING },
-            { stage: p.stage, done: String(p.done), total: String(p.total) },
-          )
-          .then((r) => {
-            if ((r.affected ?? 0) > 0) {
+        this.progressTail = this.progressTail
+          .then(async () => {
+            const result = await this.runRepo.update(
+              { id: runId, state: SYNC_STATE.RUNNING },
+              { stage: p.stage, done: String(p.done), total: String(p.total) },
+            );
+            if ((result.affected ?? 0) > 0) {
               this.gateway.broadcast('progress');
             }
+          })
+          .catch((err: unknown) => {
+            // 进度写不进去不该影响同步本身：记一条日志即可
+            this.logger.warn(
+              `执行 ${runId} 的进度写库失败：${err instanceof Error ? err.message : String(err)}`,
+            );
           });
       },
     };
   }
 
-  /** 写终态 */
+  /**
+   * 该执行是否已被取消（暂停 / 被别处改成别的状态 / 行被删）
+   *
+   * 同步器在「一天或一页走完」的边界上问一次 —— 这是暂停唯一能生效的位置，
+   * 中途打断会让当天写了一半的数据失去台账保护。
+   */
+  private async isAborted(runId: string): Promise<boolean> {
+    const row = await this.runRepo.findOneBy({ id: runId });
+    return row === null || row.state !== SYNC_STATE.RUNNING;
+  }
+
+  /**
+   * 写终态
+   *
+   * ⚠ 条件更新（`WHERE state = RUNNING`）：执行期间可能已被 `pause()` 改成 PAUSED，
+   *   此时不能再把成功 / 失败盖上去 —— 那会让「暂停」看起来像「跑完了」。
+   */
   private async finishRun(
     runId: string,
     outcome: 'success' | 'fail' | 'skip',
@@ -284,8 +332,8 @@ export class SyncService implements OnApplicationBootstrap, OnModuleDestroy {
         : outcome === 'skip'
           ? SYNC_STATE.SKIPPED
           : SYNC_STATE.FAILED;
-    await this.runRepo.update(
-      { id: runId },
+    const result = await this.runRepo.update(
+      { id: runId, state: SYNC_STATE.RUNNING },
       {
         state,
         stage,
@@ -293,6 +341,13 @@ export class SyncService implements OnApplicationBootstrap, OnModuleDestroy {
         finishedAt: () => 'now()',
       },
     );
+    if ((result.affected ?? 0) === 0) {
+      // 状态已被别处改写（最常见就是暂停）⇒ 保留它，不当成正常收尾
+      this.logger.warn(
+        `执行 ${runId} 收尾时已不是「执行中」（可能被暂停），保留现有状态：${stage}`,
+      );
+      return;
+    }
     this.gateway.broadcast('finish');
   }
 

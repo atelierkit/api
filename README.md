@@ -65,8 +65,11 @@ cp .env.example .env
 | `REDIS_HOST` / `REDIS_PORT` / `REDIS_DB` / `REDIS_PSW` | ✅ | 缺 `REDIS_HOST` 同样拒绝启动 |
 | `SETUP_TOKEN` | 建议 | 首次创建管理员的凭据，见下文「初始化凭据」 |
 | `ALLOW_SIGNUP` | 可选 | `true` 才开放自助注册，默认关闭 |
-| `SMTP_*` / `WEB_URL` | 可选 | 找回密码、改邮箱激活邮件 |
+| `SETTING_KEY` | 用邮件时必填 | 系统设置里敏感值的加密密钥（`openssl rand -hex 32`）；缺失时保存邮件配置与发信都直接报错 |
+| `WEB_URL` | 可选 | 找回密码、改邮箱激活邮件的链接前缀 |
 | `REDIS_INIT` | 谨慎 | `true` 时启动即 `flushdb`，会清掉全部缓存 |
+
+邮件（SMTP）配置**已不再走环境变量**：登录管理端后在「系统设置 → 邮件配置」里录入，授权码以密文存进 `settings` 表（`code = 'email'`），旧的 `SMTP_*` 变量仅作迁移对照、运行时不再读取。
 
 ### 安装与启动
 

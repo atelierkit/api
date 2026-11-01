@@ -92,7 +92,8 @@
      又不带 `whitelist`（两套口径并存容易误判）。
   8. 旧的 `@cloud` / `@kong` / `@tencent` 路径别名不迁移：本仓库只有 `@shared` 一个别名，模块间走相对路径（必须带 `.js`）。
 - **`apps/api/admin`**：自旧私有项目 `marbleqi/api` 的 `src/admin` 迁入的**管理员模块**（`AdminModule`），
-  只保留管理端自用的三块：系统配置 `admin/setting`、操作日志 `admin/operate`、请求日志 `admin/req`，全部 `@Allow('admin')`。
+  只保留管理端自用的四块：系统配置 `admin/setting`、邮件配置 `admin/email`、操作日志 `admin/operate`、请求日志 `admin/req`，
+  全部 `@Allow('admin')`。
   旧 `src/admin/key`、`src/admin/kong`、`src/admin/kong/object` **不在这里** —— 它们已并入 `cloud` 模块（接口前缀 `cloud/`），别按旧目录补回来。
   四条约定：
   1. **控制器类名带 `Admin` 前缀**（`AdminSettingController` / `AdminOperateController` / `AdminReqController`）：
@@ -105,6 +106,16 @@
      `admin/req/index` 带 `@ReqId()`，服务层用它把**本次查询自己**那条日志从结果里剔掉。
   4. **字典接口与清单成对**：`admin/operate/options`、`admin/req/{url,user,controller,action/:controller}` 供前端渲染下拉，
      别在前端写死枚举（`operate` / `name` 的取值随业务模块增长而变，写死就会漏项）。
+  5. **邮件配置单列 `admin/email`，不复用 `admin/setting`**（2026-11-01）：SMTP 授权码要加密落库、详情要脱敏
+     （只回 `***` + `hasPassword`）、保存要「留空即不改」，通用 `OptionController` 的整对象读写这三点都做不到；
+     在子类覆盖父类同路由 handler 又会让 Nest 重复注册路由。配置仍存 `settings`（`code = 'email'`），
+     与备案配置共用变更日志与操作序号。三条硬约定：
+     ① 密钥取 `SETTING_KEY`（`shared/common/secret.util.ts`，AES-256-GCM + `enc:v1:` 版本前缀），缺失时**直接 500**，
+     不给「缺密钥就存明文」留后门；换密钥后旧密文解不开，页面重填一次授权码即可。
+     ② **运行时不再读 `SMTP_*` 环境变量**：库中无配置即抛 422，`EmailService` 构造期也不再建连接器，
+     改为按配置指纹 + 60 秒 TTL 懒加载；保存后控制器调 `invalidate()` 立即生效（多实例最迟 TTL 到期跟进）。
+     ③ `EmailService.send()` 由「返回 `1/0`」改为**失败抛异常** —— 旧调用方（`UserService`）从不看返回值，
+     SMTP 认证失败会被静默当成「验证码已发送」，这是修缺陷不是行为回退。
 - **`apps/api/data`**：**新建**的行情数据模块（`DataModule`），照 almanac 桌面端的语义重实现（不是从旧私有 `marbleqi/api/src/data` 搬代码，
   那里是 NestJS 11 单表模型，与本仓库 12 + ESM + vitest 不同）。目录：`data/source/`（baostock 裸 TCP 协议层）、
   `data/sync/`（同步引擎：计划 + 4 同步器 + 台账）、`data/entities/`（7 张行情表实体 + DDL）、`data/`（gateway + 同步控制器 + 查询控制器）。

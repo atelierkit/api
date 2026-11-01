@@ -2,6 +2,8 @@
 export * from './email/email.interface.js';
 // 导出工具
 export * from './common/common.util.js';
+export * from './common/secret.util.js';
+export * from './email/email.config.js';
 export * from './token/token.constant.js';
 export * from './common/mask.util.js';
 export * from './common/retry-after.exception.js';

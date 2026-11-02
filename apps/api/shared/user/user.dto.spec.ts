@@ -136,10 +136,15 @@ describe('user.dto', () => {
   });
 
   describe('UserUpdateDto', () => {
-    it('昵称与头像必填（允许为空串以外的任何值）', async () => {
-      expect(await fieldsOf(UserUpdateDto, {})).toEqual(
-        expect.arrayContaining(['name', 'avatar']),
-      );
+    it('昵称必填、头像可选（不设头像的用户也能只改昵称）', async () => {
+      // 只提交昵称是合法请求：头像缺失走前端首字符回退，不该把整次保存挡在 400
+      expect(await fieldsOf(UserUpdateDto, { name: '开发' })).toHaveLength(0);
+      expect(await fieldsOf(UserUpdateDto, {})).toContain('name');
+      expect(await fieldsOf(UserUpdateDto, {})).not.toContain('avatar');
+      // 类型不对仍要挡住
+      expect(
+        await fieldsOf(UserUpdateDto, { name: '开发', avatar: 123 }),
+      ).toContain('avatar');
     });
   });
 

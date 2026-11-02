@@ -22,6 +22,8 @@
 #   DEPENDS        启动前顺带检查是否在跑的依赖容器（空格分隔，仅告警不阻断）
 #   ENV_FILE       运行时配置（默认 ./.env，建议 chmod 600）
 #   GHCR_USER / GHCR_PAT_FILE   私有包的登录凭据（默认空，公开包不需要）
+#   UPLOAD_HOST_DIR 宿主机上传目录（默认 /data/atelierkit/uploads；置空则不挂卷）
+#   UPLOAD_DIR      容器内上传目录（默认 /data/uploads），必须与挂载右侧一致
 #
 # 三条设计取舍（都是踩过的坑）：
 #   1. 配置全部由 --env-file 注入，脚本里不出现任何口令。
@@ -51,6 +53,10 @@ DEPENDS="${DEPENDS:-}"
 ENV_FILE="${ENV_FILE:-.env}"
 GHCR_USER="${GHCR_USER:-}"
 GHCR_PAT_FILE="${GHCR_PAT_FILE:-}"
+# 运行时上传目录（当前用于用户头像）：宿主机目录与容器内目录必须成对出现。
+# 不挂卷的话文件写在容器可写层里，`docker rm` 即丢 —— 本脚本正是「先删后建」。
+UPLOAD_HOST_DIR="${UPLOAD_HOST_DIR:-/data/atelierkit/uploads}"
+UPLOAD_DIR="${UPLOAD_DIR:-/data/uploads}"
 
 # 镜像标签：命令行参数 > 环境变量 TAG > latest
 TAG="${1:-${TAG:-latest}}"
@@ -136,6 +142,12 @@ run_args=(
   -e PORT="$PORT"
   -e TZ=Asia/Shanghai
 )
+# 上传目录挂卷：容器重建（下面就是先 rm 再 run）不影响已上传的头像
+if [[ -n "$UPLOAD_HOST_DIR" ]]; then
+  mkdir -p "$UPLOAD_HOST_DIR"
+  run_args+=(-v "${UPLOAD_HOST_DIR}:${UPLOAD_DIR}" -e UPLOAD_DIR="$UPLOAD_DIR")
+  log "上传目录挂载：$UPLOAD_HOST_DIR → $UPLOAD_DIR"
+fi
 [[ -n "$NETWORK" ]] && run_args+=(--network "$NETWORK")
 # 只有显式给了 PUBLISH 才映射宿主机端口（反代按容器 IP 转发时不需要）
 [[ -n "$PUBLISH" ]] && run_args+=(-p "${PUBLISH}:${PORT}")

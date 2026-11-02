@@ -635,6 +635,7 @@ kubectl -n atelierkit exec deploy/api -- wget -qO- http://127.0.0.1:3000/passpor
 | `NODE_ENV` | 建议 | 无（镜像内置 `production`） | 只认 `dev` / `demo` / `production`。**仅 `dev`、`demo` 会同步表结构**；`production` 下不建表也不改表 |
 | `PORT` | 否 | `3000` | HTTP 监听端口；容器里改它要同步改 `-p` 映射 |
 | `APP_PROFILE` | 否 | 空 | 非空时额外加载 `.env.$APP_PROFILE`（同机多环境用）；留空只读 `.env` |
+| `UPLOAD_DIR` | 否 | `data/uploads` | 运行时上传目录（当前用于用户头像），相对路径按**启动工作目录**解析。容器部署必须指向挂载卷，见 §6.6 |
 
 #### 6.2 数据库（PostgreSQL）
 
@@ -683,6 +684,24 @@ kubectl -n atelierkit exec deploy/api -- wget -qO- http://127.0.0.1:3000/passpor
 
 前端侧没有「运行时环境变量」：后端地址由 web 的 `assets/config.json` 提供，与本节的 `WEB_URL` 是两套东西，
 改 `WEB_URL` 不会改变前端请求哪个后端。
+
+#### 6.7 上传目录（头像）
+
+用户头像存在**后端本地磁盘**，没有引入对象存储：
+
+| 项 | 说明 |
+| --- | --- |
+| 目录 | `UPLOAD_DIR`（默认 `data/uploads`），头像落在其下 `avatar/<uuid>.webp` |
+| 访问 | `GET /static/avatar/<uuid>.webp`，由 `main.ts` 的 `useStaticAssets` 直接托管 |
+| 鉴权 | 该前缀**不经过全局 `TokenGuard`**（`<img>` 无法携带令牌），靠 UUID 文件名不可猜测兜底；因此拒收 SVG，响应带 `X-Content-Type-Options: nosniff` |
+| 数据 | `users.avatar` 只存 key（`avatar/<uuid>.webp`），下发时才转成 `/static/...`；换存储实现时数据不用迁移 |
+| 容器 | 必须挂卷：`deploy/start-api.sh` 默认 `-v /data/atelierkit/uploads:/data/uploads -e UPLOAD_DIR=/data/uploads`。不挂卷则文件写在容器可写层，`docker rm` 即丢（该脚本就是先删后建） |
+| 反代 | 同源反代（`baseUrl` 填 `/api/`）时要额外把 `/static/` 转发到本服务，否则头像 404；直连（填绝对地址）无需处理 |
+| 备份 | 与 PostgreSQL 一起备份该目录；换头像会删除旧文件，残留的孤儿文件可定期清理 |
+
+单张上限 2MB，前端上传前已裁成 256×256（WebP）。用户上限 20 个、总量通常在几 MB 量级，
+所以没有引入 MinIO 之类的对象存储 —— 真要做文件管理 / 分享链接时，按 `shared/storage/local.storage.ts`
+的 `FileStorage` 接口加一个 S3 实现即可，DB 与前端都不用动。
 
 ## 首次使用：创建管理员
 

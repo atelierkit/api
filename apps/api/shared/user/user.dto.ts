@@ -124,9 +124,15 @@ export class UserUpdateDto {
   @IsNotEmpty({ message: '昵称不能为空' })
   name!: string;
 
-  /** 头像URL */
-  @IsNotEmpty({ message: '头像URL不能为空' })
-  avatar!: string;
+  /**
+   * 头像
+   *
+   * 注：**可选** —— 不设头像的用户，页头回退到名字首字符，不该因此连昵称都改不了；
+   * 空串表示清空。值可以是存储 key（新上传）、`/static/...`（历史数据）或外链，服务端只 trim
+   */
+  @IsOptional()
+  @IsString({ message: '头像格式不正确！' })
+  avatar?: string;
 }
 
 /** 令牌有效期设置DTO */

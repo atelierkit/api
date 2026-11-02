@@ -5,6 +5,9 @@ export * from './common/common.util.js';
 export * from './common/secret.util.js';
 export * from './email/email.config.js';
 export * from './token/token.constant.js';
+export * from './storage/storage.constant.js';
+export * from './storage/storage.util.js';
+export * from './storage/local.storage.js';
 export * from './common/mask.util.js';
 export * from './common/retry-after.exception.js';
 export * from './user/password.util.js';
@@ -38,6 +41,7 @@ export * from './option/option.service.js';
 export * from './setting/setting.service.js';
 export * from './role/role.service.js';
 export * from './user/user.service.js';
+export * from './user/avatar.service.js';
 export * from './token/token.service.js';
 export * from './setup/setup.service.js';
 // 导出网关
@@ -60,6 +64,7 @@ export * from './option/option.controller.js';
 // 导出业务控制器
 export * from './setting/setting.controller.js';
 export * from './user/user.controller.js';
+export * from './user/avatar.controller.js';
 export * from './passport/passport.controller.js';
 export * from './shortcut/shortcut.controller.js';
 // 导出模块

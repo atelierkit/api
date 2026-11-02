@@ -23,6 +23,8 @@ import { EmailService } from '../email/email.service.js';
 import { OperateService } from '../operate/operate.service.js';
 import { QueueService } from '../queue/queue.service.js';
 import { RedisService } from '../redis/redis.service.js';
+import { fileStorage } from '../storage/local.storage.js';
+import { toPublicUrl, toStorageKey } from '../storage/storage.util.js';
 import { TOKEN_VALIDS, TOKEN_VALID_DEFAULT } from '../token/token.constant.js';
 import { DUMMY_HASH, hashPassword, verifyPassword } from './password.util.js';
 import {
@@ -87,7 +89,8 @@ export class UserService extends CommonService<UserEntity, UserLogEntity> {
    * @returns 用户清单
    */
   async index(operateId: number = -1) {
-    return this.userRepository.find({
+    /** 用户清单 */
+    const rows = await this.userRepository.find({
       select: {
         id: true,
         username: true,
@@ -109,6 +112,12 @@ export class UserService extends CommonService<UserEntity, UserLogEntity> {
         update: { operateId: MoreThan(operateId) },
       },
     });
+    // 库里存的是存储 key，下发前统一转成可加载地址（外链原样返回）；
+    // 注：就地赋值而不是 `{...row}` —— 展开会丢掉实体的原型方法（`userLoad`），类型上直接不兼容
+    for (const row of rows) {
+      row.avatar = toPublicUrl(row.avatar);
+    }
+    return rows;
   }
 
   /**
@@ -203,11 +212,26 @@ export class UserService extends CommonService<UserEntity, UserLogEntity> {
         throw new ConflictException(`邮箱${email}已被使用！`);
       }
     }
-    return super.update(
+    /** 被替换掉的旧头像 key，注：只有提交了 avatar 才需要清理，外链解析不出 key 时为 null */
+    const staleKey =
+      value.avatar === undefined ? null : await this.avatarKeyOf(id);
+    /**
+     * 待落盘的头像值
+     *
+     * 注：管理端编辑弹窗回填的是 `/static/avatar/x.webp`（下发时已转成地址），
+     * 这里反解回 key 再入库 —— 库里只放 key，换存储实现或换域名时数据不用迁移；
+     * 外链（别人图床）与空串原样保留
+     */
+    const avatar =
+      value.avatar === undefined
+        ? undefined
+        : (toStorageKey(value.avatar) ?? value.avatar.trim());
+    /** 更新结果 */
+    const result = await super.update(
       id,
       {
         ...(value.name === undefined ? {} : { name: value.name.trim() }),
-        ...(value.avatar === undefined ? {} : { avatar: value.avatar.trim() }),
+        ...(avatar === undefined ? {} : { avatar }),
         ...(value.email === undefined ? {} : { email }),
         ...(value.status === undefined ? {} : { status: value.status }),
         ...(value.roles === undefined ? {} : { roles: value.roles }),
@@ -215,6 +239,29 @@ export class UserService extends CommonService<UserEntity, UserLogEntity> {
       userId,
       reqId,
     );
+    // 先落库再删文件：删除失败的代价是一个孤儿文件，反过来（先删后落库）会让头像直接 404
+    if (staleKey && staleKey !== avatar) {
+      await fileStorage().remove(staleKey);
+    }
+    return result;
+  }
+
+  /**
+   * 读取用户当前头像的存储 key
+   *
+   * 注：`show(id, 'status')` 不含 avatar 字段，这里单独取一次；
+   * 外链（历史数据）解析不出 key，返回 null 表示「没有可删除的本地文件」
+   *
+   * @param id 用户ID
+   * @returns 存储 key，非本地文件时为 null
+   */
+  private async avatarKeyOf(id: number): Promise<string | null> {
+    /** 用户 */
+    const user = await this.userRepository.findOne({
+      select: { avatar: true } as FindOptionsSelect<UserEntity>,
+      where: { id },
+    });
+    return toStorageKey(user?.avatar);
   }
 
   /**
@@ -283,10 +330,21 @@ export class UserService extends CommonService<UserEntity, UserLogEntity> {
         },
       } as FindOptionsSelect<UserEntity>;
     }
-    return this.userRepository.findOne({
+    /** 用户信息 */
+    const user = await this.userRepository.findOne({
       select,
       where: { id },
     });
+    if (!user) {
+      return user;
+    }
+    // 只有取到 avatar 的口径才做地址转换，`status` / `login` 不含该字段，别凭空补一个空值
+    const hasAvatar = type === 'startup' || type === 'all';
+    if (hasAvatar) {
+      // 就地赋值，保留实体原型方法（展开会让 `userLoad` 之类的实例方法丢失）
+      user.avatar = toPublicUrl(user.avatar);
+    }
+    return user;
   }
 
   /**

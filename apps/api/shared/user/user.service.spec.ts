@@ -26,6 +26,24 @@ import { UserEntity, UserLogEntity } from './user.entity.js';
 import { UserService } from './user.service.js';
 
 /**
+ * 文件存储替身
+ *
+ * 注：必须在导入被测服务之前注册 —— `vi.mock` 会被提升，保证 `UserService` 拿到的是替身，
+ * 否则单测会往真实上传目录写文件
+ */
+const storage = vi.hoisted(() => ({
+  put: vi.fn(async (_key: string, _data: Buffer) => undefined),
+  remove: vi.fn(async (_key: string) => undefined),
+  url: vi.fn((key: string) => `/static/${key}`),
+}));
+
+vi.mock('../storage/local.storage.js', () => ({
+  fileStorage: () => storage,
+  LocalFileStorage: class {},
+  resetFileStorage: () => undefined,
+}));
+
+/**
  * 构造存储器替身
  *
  * @returns 存储器替身
@@ -875,6 +893,72 @@ describe('UserService', () => {
       >;
       expect(typeof value.lastSessionAt).toBe('number');
       expect(operate.create).not.toHaveBeenCalled();
+    });
+  });
+
+  describe('头像清理', () => {
+    afterEach(() => {
+      vi.clearAllMocks();
+    });
+
+    it('换头像后删除被替换的本地文件', async () => {
+      /** 被测服务与替身 */
+      const { service, repository } = serviceOf();
+      // 第一次 findOne 是 show(id, 'status')，第二次是 avatarKeyOf 取旧 key
+      repository.findOne
+        .mockResolvedValueOnce({ id: 5, email: null })
+        .mockResolvedValueOnce({ avatar: 'avatar/old.webp' });
+      repository.existsBy.mockResolvedValueOnce(true);
+
+      await service.update(5, { name: '开发', avatar: 'avatar/new.webp' }, 7, 9);
+
+      expect(storage.remove).toHaveBeenCalledWith('avatar/old.webp');
+    });
+
+    it('旧值是外链时不做删除（不能删别人图床上的图）', async () => {
+      /** 被测服务与替身 */
+      const { service, repository } = serviceOf();
+      repository.findOne
+        .mockResolvedValueOnce({ id: 5, email: null })
+        .mockResolvedValueOnce({ avatar: 'https://example.com/a.png' });
+      repository.existsBy.mockResolvedValueOnce(true);
+
+      await service.update(5, { name: '开发', avatar: 'avatar/new.webp' }, 7, 9);
+
+      expect(storage.remove).not.toHaveBeenCalled();
+    });
+
+    it('没提交 avatar 时既不查旧值也不删文件', async () => {
+      /** 被测服务与替身 */
+      const { service, repository } = serviceOf();
+      repository.findOne.mockResolvedValueOnce({ id: 5, email: null });
+      repository.existsBy.mockResolvedValueOnce(true);
+
+      await service.update(5, { name: '开发' }, 7, 9);
+
+      expect(repository.findOne).toHaveBeenCalledTimes(1);
+      expect(storage.remove).not.toHaveBeenCalled();
+    });
+
+    it('提交下发地址（/static/...）时落库仍是 key', async () => {
+      /** 被测服务与替身 */
+      const { service, repository } = serviceOf();
+      repository.findOne
+        .mockResolvedValueOnce({ id: 5, email: null })
+        .mockResolvedValueOnce({ avatar: 'avatar/old.webp' });
+      repository.existsBy.mockResolvedValueOnce(true);
+
+      await service.update(
+        5,
+        { name: '开发', avatar: '/static/avatar/new.webp' },
+        7,
+        9,
+      );
+
+      /** 落库数据 */
+      const value = repository.update.mock.calls[0][1] as { avatar: string };
+      // 管理端编辑弹窗回填的就是这个地址，反解回 key 才能保证「库里只存 key」
+      expect(value.avatar).toBe('avatar/new.webp');
     });
   });
 });

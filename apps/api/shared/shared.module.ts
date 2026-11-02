@@ -19,6 +19,8 @@ import { SettingService } from './setting/setting.service.js';
 import { SetupService } from './setup/setup.service.js';
 import { ShortcutController } from './shortcut/shortcut.controller.js';
 import { TokenService } from './token/token.service.js';
+import { AvatarService } from './user/avatar.service.js';
+import { UserAvatarController } from './user/avatar.controller.js';
 import { UserController } from './user/user.controller.js';
 import { UserEntity, UserLogEntity } from './user/user.entity.js';
 import { UserGateway } from './user/user.gateway.js';
@@ -49,11 +51,13 @@ import { UserService } from './user/user.service.js';
     RoleService,
     SetupService,
     UserGateway,
+    AvatarService,
     DbMonitorService,
   ],
   controllers: [
     PassportController,
     UserController,
+    UserAvatarController,
     ShortcutController,
     SettingController,
   ],

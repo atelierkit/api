@@ -665,11 +665,15 @@ kubectl -n atelierkit exec deploy/api -- wget -qO- http://127.0.0.1:3000/passpor
 | `SETTING_KEY` | 用邮件时必填 | 空 | 系统设置里敏感值（当前是 SMTP 授权码）的 AES-256-GCM 密钥。缺失时**保存邮件配置、发信都直接报错**（不会退化为明文存储）。生成：`openssl rand -hex 32`。⚠️ 更换后库里旧密文解不开，需在「系统设置 → 邮件配置」重填授权码 |
 | `ALLOW_SIGNUP` | 否 | `false` | 仅 `true` 时开放 `POST /passport/register`，否则返回 `410`；账号由管理员创建（上限 20 个） |
 
-#### 6.5 邮件（已废弃）
+#### 6.5 邮件（无环境变量）
 
-`SMTP_HOST` / `SMTP_PORT` / `SMTP_ACCOUNT` / `SMTP_PASSWORD` / `SMTP_USER` **运行时不再读取**：
-2026-11-01 起邮件配置在「系统设置 → 邮件配置」里维护并落库（`settings.code='email'`，授权码用 `SETTING_KEY` 加密）。
-`.env.example` 保留这五个键仅供一次性迁移对照，确认新配置可用后整段删除。
+邮件配置**没有任何环境变量入口**：2026-11-01 起改在「系统设置 → 邮件配置」里维护并落库
+（`settings.code='email'`，授权码用 `SETTING_KEY` 加密后存储），运行时**完全不读**
+`SMTP_HOST` / `SMTP_PORT` / `SMTP_ACCOUNT` / `SMTP_PASSWORD` / `SMTP_USER`。
+
+`.env` 与 `.env.example` 里的 SMTP 段已于 2026-11-02 删除。从旧版本升级的部署若 `.env` 里还留着这五个键，
+既不会生效也不会报错：管理页只会提示一次（接口返回 `envDetected`，探测函数见 `shared/email/email.config.ts` 的 `hasEnvSmtp`），
+确认新配置可用后自行删掉即可。邮件功能唯一必填的环境变量是 `SETTING_KEY`，见 §6.4。
 
 #### 6.6 前端地址
 

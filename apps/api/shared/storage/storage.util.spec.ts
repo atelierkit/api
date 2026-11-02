@@ -115,10 +115,22 @@ describe('toStoragePath', () => {
     expect(toStoragePath(root, 'avatar/../../a.png')).toBeNull();
   });
 
-  it('同名前缀的兄弟目录不被当成子路径', () => {
-    // 根目录为 `data/uploads` 时，`data/uploads2/a.png` 不能通过前缀判断
-    const sibling = `${root}2${sep}a.png`;
-    expect(toStoragePath(root, sibling)).toBeNull();
+  it('key 一律按根目录下的相对路径解析，同名前缀的兄弟目录拼不出来', () => {
+    // 注 1：`uploads2` 只能是根目录内的子目录，不可能变成与根目录同级的兄弟目录 ——
+    // 越出根目录的唯一入口是绝对路径，而 `isSafeKey` 已拦掉绝对路径与反斜杠，
+    // 所以这里断言的是「解析结果仍在根目录之内」，而不是「返回 null」。
+    // 注 2：上一版用例用 `${root}2${sep}a.png` 求解，在 Linux 上 `sep` 为 `/` 时它会成为
+    // 合法 relative key 并被解析到根目录内 ⇒ CI 红；Windows 上 `sep` 为 `\` 又被
+    // `isSafeKey` 的反斜杠规则挡掉 ⇒ 本地假绿。两边都不是在验前缀判断本身。
+    const path = toStoragePath(root, ['uploads2', 'a.png'].join('/'));
+    expect(path).toBe(resolve(root, 'uploads2', 'a.png'));
+    // 前缀判断必须带分隔符，否则 `/data/uploads2` 会被 startsWith 当成 `/data/uploads` 的子路径
+    expect(path?.startsWith(`${resolve(root)}${sep}`)).toBe(true);
+  });
+
+  it('绝对路径形式的 key 一律拒收（兄弟目录越权的唯一入口）', () => {
+    expect(toStoragePath(root, resolve(root, 'a.png'))).toBeNull();
+    expect(toStoragePath(root, `${sep}etc${sep}passwd`)).toBeNull();
   });
 });
 

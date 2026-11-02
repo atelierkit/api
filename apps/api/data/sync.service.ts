@@ -95,13 +95,20 @@ export class SyncService implements OnApplicationBootstrap, OnModuleDestroy {
     void this.client.logout();
   }
 
-  /** 唤醒消费（幂等：消费循环已在跑则只记一个信号） */
+  /**
+   * 唤醒消费（幂等：消费循环已在跑则只记一个信号）
+   *
+   * ⚠ 信号只在「已在消费」时置位：`consume()` 的 finally 会用 `wake()` 重启循环，
+   * 若无条件置位，重启后标志又为真 ⇒ 消费段无限自激重启（队列空时表现为
+   * 每秒数百次空 UPDATE，把数据库 CPU 打满）。详见 consume() 的收尾注释。
+   */
   wake(): void {
-    this.wakeRequested = true;
-    if (!this.consuming) {
-      this.consuming = true;
-      this.queueSrv.addTask(() => this.consume());
+    if (this.consuming) {
+      this.wakeRequested = true;
+      return;
     }
+    this.consuming = true;
+    this.queueSrv.addTask(() => this.consume());
   }
 
   /**
@@ -122,6 +129,8 @@ export class SyncService implements OnApplicationBootstrap, OnModuleDestroy {
     } finally {
       this.consuming = false;
       // 收尾前再确认一次：窗口期内若有新入队，重新唤醒
+      // ⚠ 这里的「先清标志、再 wake()」依赖 wake() 只在 consuming 为真时置标志：
+      // 此时已经置 false，wake() 走的是启动分支，标志才真正被消费掉；否则会自激。
       if (this.wakeRequested && !this.stopping) {
         this.wakeRequested = false;
         this.wake();

@@ -511,6 +511,59 @@ describe('SyncService', () => {
     expect(queue.addTask).toHaveBeenCalledTimes(1);
   });
 
+  it('消费段结束后队列仍空 ⇒ 不自我重启（否则空转打满数据库 CPU）', async () => {
+    // 队列空：claimNext 的 UPDATE 命中 0 行，返回 null
+    const qb = {
+      update: vi.fn(() => qb),
+      set: vi.fn(() => qb),
+      where: vi.fn(() => qb),
+      returning: vi.fn(() => qb),
+      execute: vi.fn(async () => ({ raw: [] })),
+    };
+    const runRepo = { createQueryBuilder: vi.fn(() => qb) };
+    const { svc, queue } = makeService({ runRepo });
+
+    svc.wake();
+    expect(queue.addTask).toHaveBeenCalledTimes(1);
+
+    // 执行排队的消费任务：队列空 ⇒ 取号即退出
+    const consume = queue.addTask.mock.calls[0][0] as () => Promise<void>;
+    await consume();
+
+    // 关键断言：收尾后不许再入队。旧实现在此处会无限自激（每秒数百次空 UPDATE）
+    expect(queue.addTask).toHaveBeenCalledTimes(1);
+    expect(qb.execute).toHaveBeenCalledTimes(1);
+  });
+
+  it('消费期间有新入队 ⇒ 收尾时重启一次，且之后不再自激', async () => {
+    const qb = {
+      update: vi.fn(() => qb),
+      set: vi.fn(() => qb),
+      where: vi.fn(() => qb),
+      returning: vi.fn(() => qb),
+      execute: vi.fn(async () => ({ raw: [] })),
+    };
+    const runRepo = { createQueryBuilder: vi.fn(() => qb) };
+    const { svc, queue } = makeService({ runRepo });
+
+    svc.wake();
+    const consume = queue.addTask.mock.calls[0][0] as () => Promise<void>;
+
+    // 消费段还在跑（consuming=true）时又入队 ⇒ 只记信号
+    const running = consume();
+    svc.wake();
+    await running;
+
+    // 丢唤醒守卫生效：收尾时重启一次
+    expect(queue.addTask).toHaveBeenCalledTimes(2);
+
+    // 第二次消费仍无任务 ⇒ 标志已被消费掉，不再入队（这里若继续增长即为自激复发）
+    const second = queue.addTask.mock.calls[1][0] as () => Promise<void>;
+    await second();
+    expect(queue.addTask).toHaveBeenCalledTimes(2);
+    expect(qb.execute).toHaveBeenCalledTimes(2);
+  });
+
   it('onModuleDestroy 停止并登出', async () => {
     const { svc } = makeService();
     const client = { logout: vi.fn(async () => undefined) };

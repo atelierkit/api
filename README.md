@@ -24,7 +24,11 @@
   （`/data/security`、`/data/calendar`、`/data/bar`）登录即可。数据源是 baostock 裸 TCP 协议（`data/source/`），
   **同步消费段跑在 api 进程内 ⇒ 部署必须单实例**（`onApplicationBootstrap` 的僵尸对账在多副本下会互抢正在跑的执行）。
   进度推送走 `DataGateway`（socket.io，只发 `data:changed` 信号、数值仍走 HTTP 快照）；**网关必须开 `cors`**，
-  因为 web 与 api 不同源。快照的 `recent` 同时返回活跃执行与最近 10 条已结束执行（否则失败原因随着收尾一起消失），
+  因为 web 与 api 不同源。经 nginx 同机反代时还要**单独放行 `/socket.io/` 并开启 WebSocket 升级**
+  （`proxy_http_version 1.1` + `Upgrade`/`Connection` 头，且 `proxy_pass` 末尾不带 `/`）：
+  漏了这条，握手会落到前端的 SPA 兜底上返回 `index.html`，实时通道静默退化为 5 秒轮询
+  （页面顶部提示「实时通道未连接」）。nginx 写法见 `atelierkit/web` 的 README「同机反代」一节。
+  快照的 `recent` 同时返回活跃执行与最近 10 条已结束执行（否则失败原因随着收尾一起消失），
   `queue` 计数走 `count()` 而不是「取一页再数」（后者会被 `take` 钉死在页长）。
   行情表（`securities` / `trade_calendar` / `bars` / `adjust_factors` / `data_coverage` / `sync_tasks` / `sync_runs`）
   落同库 public，DDL 见 `apps/api/data/entities/schema.ddl.sql`（含两条 synchronize 生成不了的**部分唯一索引**，须手工执行）。

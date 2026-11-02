@@ -7,7 +7,7 @@ import {
   OnModuleDestroy,
 } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
-import { Repository } from 'typeorm';
+import { In, Repository } from 'typeorm';
 // 内部依赖
 import { QueueService } from '@shared';
 import { BaostockClient } from './source/baostock.client.js';
@@ -26,6 +26,7 @@ import {
   displayNameOf,
   SYNC_STATE,
   SYNC_TARGET,
+  TERMINAL_STATES,
   type SyncTarget,
 } from './sync/sync.types.js';
 import type { Watermark } from './sync/watermark.js';
@@ -508,7 +509,14 @@ export class SyncService implements OnApplicationBootstrap, OnModuleDestroy {
     return { paused };
   }
 
-  /** 快照：四卡汇总 + 当前进度 + 队列计数 */
+  /**
+   * 快照：四卡汇总 + 当前进度 + 队列计数 + 最近执行
+   *
+   * ⚠ 队列计数必须走 `count()`，不能用「取一页行再数」：`take` 会把计数钉死在页长上
+   *   （队列 30 条也只显示 20），是「界面上的队列长度不对」的直接来源。
+   * ⚠ 「最近执行」要同时给活跃行与刚结束的行：只查活跃行会让一次执行在收尾瞬间从列表里消失，
+   *   失败原因（写在 stage 里）就再也看不到了。
+   */
   async snapshot(): Promise<SnapshotResult> {
     const cards = await Promise.all([
       this.cardOf(SYNC_TARGET.CALENDAR),
@@ -517,30 +525,29 @@ export class SyncService implements OnApplicationBootstrap, OnModuleDestroy {
       this.cardOf(SYNC_TARGET.ADJUST_FACTOR),
     ]);
 
-    const active = await this.runRepo.find({
-      where: [{ state: SYNC_STATE.QUEUED }, { state: SYNC_STATE.RUNNING }],
-      order: { id: 'ASC' },
-      take: 20,
-    });
+    const [queued, running, active, finished] = await Promise.all([
+      this.runRepo.count({ where: { state: SYNC_STATE.QUEUED } }),
+      this.runRepo.count({ where: { state: SYNC_STATE.RUNNING } }),
+      this.runRepo.find({
+        where: [{ state: SYNC_STATE.QUEUED }, { state: SYNC_STATE.RUNNING }],
+        order: { id: 'ASC' },
+        take: 20,
+      }),
+      this.runRepo.find({
+        where: { state: In(TERMINAL_STATES) },
+        order: { id: 'DESC' },
+        take: 10,
+      }),
+    ]);
 
     return {
       cards,
-      queue: {
-        queued: active.filter((r) => r.state === SYNC_STATE.QUEUED).length,
-        running: active.filter((r) => r.state === SYNC_STATE.RUNNING).length,
-      },
-      recent: active.map((r) => ({
-        id: Number(r.id),
-        target: r.target,
-        state: r.state,
-        stage: r.stage,
-        done: Number(r.done ?? 0),
-        total: Number(r.total ?? 0),
-      })),
+      queue: { queued, running },
+      recent: [...active.map(toRecentRun), ...finished.map(toRecentRun)],
     };
   }
 
-  /** 单卡汇总 */
+  /** 单卡汇总（带上最近一次执行的进度，卡面才显示得出百分比） */
   private async cardOf(target: SyncTarget): Promise<CardSummary> {
     const scope = coverageScopeOf(target);
     const wm = await this.findWatermark(scope, this.datasetOf(target));
@@ -552,7 +559,10 @@ export class SyncService implements OnApplicationBootstrap, OnModuleDestroy {
       lastDate: wm?.lastDate ?? null,
       recordCount: wm?.rows ?? 0,
       state: latest?.state ?? null,
-      updatedAt: null,
+      stage: latest?.stage ?? null,
+      done: Number(latest?.done ?? 0),
+      total: Number(latest?.total ?? 0),
+      updatedAt: toIso(latest?.finishedAt ?? latest?.startedAt ?? null),
     };
   }
 
@@ -591,6 +601,13 @@ export interface CardSummary {
   lastDate: string | null;
   recordCount: number;
   state: number | null;
+  /** 最近一次执行的阶段文案（失败原因就在这里） */
+  stage: string | null;
+  /** 最近一次执行的已完成量 */
+  done: number;
+  /** 最近一次执行的总量（0 = 未知） */
+  total: number;
+  /** 最近一次执行的开始/结束时刻（ISO 串，null = 从未执行） */
   updatedAt: string | null;
 }
 
@@ -601,4 +618,24 @@ export interface RecentRun {
   stage: string;
   done: number;
   total: number;
+}
+
+/** 执行行 → 快照里的一行（bigint 列一律转 number，前端不再处理字符串数值） */
+function toRecentRun(row: SyncRunEntity): RecentRun {
+  return {
+    id: Number(row.id),
+    target: row.target,
+    state: row.state,
+    stage: row.stage ?? '',
+    done: Number(row.done ?? 0),
+    total: Number(row.total ?? 0),
+  };
+}
+
+/** 时间列 → ISO 串（数据库可能给 Date，也可能给字符串，两种都认） */
+function toIso(value: Date | string | null): string | null {
+  if (value === null) {
+    return null;
+  }
+  return value instanceof Date ? value.toISOString() : value;
 }

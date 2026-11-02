@@ -47,6 +47,14 @@ export function isActive(state: SyncState): boolean {
 /** 活跃状态集合（部分唯一索引的谓词里也要用同一份） */
 export const ACTIVE_STATES: SyncState[] = [SYNC_STATE.QUEUED, SYNC_STATE.RUNNING];
 
+/** 终态集合（队列不会被它们占位；快照查「最近执行」用它，与 isTerminal 保持同一口径） */
+export const TERMINAL_STATES: SyncState[] = [
+  SYNC_STATE.SUCCEEDED,
+  SYNC_STATE.FAILED,
+  SYNC_STATE.SKIPPED,
+  SYNC_STATE.PAUSED,
+];
+
 /** 同步台账作用域 */
 export const COVERAGE_SCOPE = {
   SECURITY: 'security',

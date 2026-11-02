@@ -46,7 +46,8 @@ describe('SyncService', () => {
       findOneBy: vi.fn(async () => null), // 四张卡都没台账
     };
     const runRepo = {
-      find: vi.fn(async () => []), // 无活跃执行
+      count: vi.fn(async () => 0), // 无活跃执行
+      find: vi.fn(async () => []), // 活跃 + 终态都为空
       findOne: vi.fn(async () => null), // 无历史执行
     };
     const { svc } = makeService({ coverageRepo, runRepo });
@@ -65,20 +66,97 @@ describe('SyncService', () => {
     ]);
   });
 
-  it('snapshot 的队列计数区分排队与执行中', async () => {
+  it('snapshot 的队列计数走 count()，不受分页长度影响', async () => {
     const coverageRepo = { findOneBy: vi.fn(async () => null) };
+    // 30 条在排队、2 条在跑：计数不能被 take 截断成页长
+    const count = vi.fn(async (options: { where: { state: number } }) =>
+      options.where.state === SYNC_STATE.QUEUED ? 30 : 2,
+    );
     const runRepo = {
-      find: vi.fn(async () => [
-        { id: '1', state: SYNC_STATE.QUEUED, target: 'BarByDate', stage: '', done: '0', total: '0' },
-        { id: '2', state: SYNC_STATE.RUNNING, target: 'AdjustFactor', stage: '同步中', done: '3', total: '10' },
-      ]),
+      count,
+      // 第一次查活跃、第二次查终态（这里没有已结束的执行）
+      find: vi
+        .fn()
+        .mockResolvedValueOnce([
+          { id: '1', state: SYNC_STATE.QUEUED, target: 'BarByDate', stage: '', done: '0', total: '0' },
+          { id: '2', state: SYNC_STATE.RUNNING, target: 'AdjustFactor', stage: '同步中', done: '3', total: '10' },
+        ])
+        .mockResolvedValueOnce([]),
       findOne: vi.fn(async () => null),
     };
     const { svc } = makeService({ coverageRepo, runRepo });
 
     const result = await svc.snapshot();
-    expect(result.queue).toEqual({ queued: 1, running: 1 });
+    expect(result.queue).toEqual({ queued: 30, running: 2 });
     expect(result.recent).toHaveLength(2);
+    expect(count).toHaveBeenCalledTimes(2);
+  });
+
+  it('snapshot 的最近执行同时包含活跃行与刚结束的行', async () => {
+    const coverageRepo = { findOneBy: vi.fn(async () => null) };
+    const runRepo = {
+      count: vi.fn(async () => 0),
+      // 第一次查活跃（ASC），第二次查终态（DESC）
+      find: vi
+        .fn()
+        .mockResolvedValueOnce([
+          { id: '9', state: SYNC_STATE.RUNNING, target: 'BarByDate', stage: '同步中', done: '5', total: '10' },
+        ])
+        .mockResolvedValueOnce([
+          { id: '8', state: SYNC_STATE.FAILED, target: 'Calendar', stage: '连接失败', done: '0', total: '0' },
+        ]),
+      findOne: vi.fn(async () => null),
+    };
+    const { svc } = makeService({ coverageRepo, runRepo });
+
+    const result = await svc.snapshot();
+
+    // 活跃行在前、刚结束的行在后；失败原因（stage）不会因为收尾而消失
+    expect(result.recent).toEqual([
+      { id: 9, target: 'BarByDate', state: SYNC_STATE.RUNNING, stage: '同步中', done: 5, total: 10 },
+      { id: 8, target: 'Calendar', state: SYNC_STATE.FAILED, stage: '连接失败', done: 0, total: 0 },
+    ]);
+    // 终态查询按状态集合过滤，不是「除活跃之外的全部」
+    expect(runRepo.find).toHaveBeenLastCalledWith(
+      expect.objectContaining({ where: { state: expect.anything() } }),
+    );
+  });
+
+  it('snapshot 的卡片带上最近一次执行的进度与更新时刻', async () => {
+    const coverageRepo = {
+      findOneBy: vi.fn(async () => ({
+        scope: 'bar.byDate',
+        dataset: 'bar',
+        parameters: '',
+        lastDate: '2026-01-05',
+        recordCount: '123',
+      })),
+    };
+    const runRepo = {
+      count: vi.fn(async () => 0),
+      find: vi.fn(async () => []),
+      // 执行中：没有结束时刻 ⇒ updatedAt 退回开始时刻
+      findOne: vi.fn(async () => ({
+        state: SYNC_STATE.RUNNING,
+        stage: '同步全市场日线',
+        done: '5',
+        total: '10',
+        startedAt: new Date('2026-01-05T01:00:00.000Z'),
+        finishedAt: null,
+      })),
+    };
+    const { svc } = makeService({ coverageRepo, runRepo });
+
+    const result = await svc.snapshot();
+
+    expect(result.cards[0]).toMatchObject({
+      target: SYNC_TARGET.CALENDAR,
+      stage: '同步全市场日线',
+      done: 5,
+      total: 10,
+      updatedAt: '2026-01-05T01:00:00.000Z',
+      state: SYNC_STATE.RUNNING,
+    });
   });
 
   it('pause 把 Running 的执行置为 Paused 并广播', async () => {

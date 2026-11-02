@@ -23,6 +23,9 @@
   写操作（`/data/sync/start`、`/data/sync/pause`）要求 `admin`；快照（`/data/sync/snapshot`）与三个只读查询
   （`/data/security`、`/data/calendar`、`/data/bar`）登录即可。数据源是 baostock 裸 TCP 协议（`data/source/`），
   **同步消费段跑在 api 进程内 ⇒ 部署必须单实例**（`onApplicationBootstrap` 的僵尸对账在多副本下会互抢正在跑的执行）。
+  进度推送走 `DataGateway`（socket.io，只发 `data:changed` 信号、数值仍走 HTTP 快照）；**网关必须开 `cors`**，
+  因为 web 与 api 不同源。快照的 `recent` 同时返回活跃执行与最近 10 条已结束执行（否则失败原因随着收尾一起消失），
+  `queue` 计数走 `count()` 而不是「取一页再数」（后者会被 `take` 钉死在页长）。
   行情表（`securities` / `trade_calendar` / `bars` / `adjust_factors` / `data_coverage` / `sync_tasks` / `sync_runs`）
   落同库 public，DDL 见 `apps/api/data/entities/schema.ddl.sql`（含两条 synchronize 生成不了的**部分唯一索引**，须手工执行）。
 - **`libs/`** —— 可复用 NestJS 库（当前为空，待两服务出现共享代码时拆分）。

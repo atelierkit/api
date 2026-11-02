@@ -231,7 +231,7 @@ docker run -d --name atelierkit-api --restart always \
 2. **端口两侧必须一致。** 容器内监听 `PORT`（默认 3000），`-p 3000:3000` 与之对齐；改成 `-e PORT=8080` 时映射要跟着改。
 
 3. **`--env-file` 不做去转义处理。** 文件里带 `\r`（Windows 下编辑过）会把回车读进变量值，口令从此永远对不上。
-   `deploy/start-api.sh` 为此做了前置拦截；手工 `docker run` 时先自查：`grep -c $'\r' .env` 应为 `0`。
+   启动前先自查：`grep -c $'\r' .env` 应为 `0`（非 0 就先 `sed -i 's/\r$//' .env`，否则口令里会混入回车）。
 
 4. **这个镜像只含 api。** `Dockerfile` 跑的是 `yarn build:api`，容器里没有 `dist/apps/worker`。
    需要 worker 就把该行改成 `RUN yarn build:api && yarn build:worker` 后重建，再用命令覆盖启动：
@@ -324,7 +324,7 @@ docker run -d --name atelierkit-api ... ghcr.io/atelierkit/api:sha-1a2b3c4   # �
 ```
 
 顺序不能反：先删后拉，镜像源抖动时会把在跑的服务直接弄下线。
-`deploy/start-api.sh` 已把「先拉后删 + 启动校验 + 固定网络身份」固化，可以直接复用。
+把这三步写成一个脚本复用即可：先拉后删、启动后校验容器仍在跑、失败时打印最近日志。
 
 ### 4. Docker Compose 部署
 

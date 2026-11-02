@@ -27,7 +27,7 @@ async function fieldsOf(
 const KONG = {
   name: '本地网关',
   description: '家用服务器的 Kong',
-  url: 'http://192.168.1.10:8001',
+  url: 'http://192.0.2.10:8001',
   status: true,
 };
 

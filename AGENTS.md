@@ -18,18 +18,18 @@
 - 生产产物落在 `dist/apps/<project>/`；入口为 `dist/apps/api/main.js` 与 `dist/apps/worker/main.js`。
 - **再建库时**：`nest g lib <name>` 会顺手加 `"builder": "rspack"` 与 4 个 webpack 系 devDep，如无需要记得回退；且 TS 6 起
   `libs/*/tsconfig.lib.json` **必须显式 `rootDir`**（TS5011），写 `"rootDir": "./src"` 才能得到 `dist/libs/<name>/index.js` 而非多套一层的路径。
-- **`apps/api/shared`**：自旧私有项目 `marbleqi/api` 的 `src/shared` 迁入的共用领域模块（`SharedModule`：用户 / 角色 / 令牌 / 配置 /
+- **`apps/api/shared`**：自旧私有 `api` 项目 的 `src/shared` 迁入的共用领域模块（`SharedModule`：用户 / 角色 / 令牌 / 配置 /
   操作·请求日志 / 缓存 / 队列 / 邮件 / 监控）。它随 `apps/api` 一起构建（产物 `dist/apps/api/shared/`），当前**只有 api 使用**。
   两条不受「库还是目录」影响的 ESM 铁律：内部相对导入**必须带 `.js`**；**不用桶文件（`index.ts`）互相导入**
   （ESM 下会因 TDZ 抛 `Cannot access 'X' before initialization`），一律按文件具名导入 —— `shared/index.ts` 只对外聚合，内部不反向引用它。
-- **`apps/api/auth`**：自旧私有项目 `marbleqi/api` 的 `src/auth` 迁入的**访问控制模块**（`AuthModule`），只含管理端控制器：
+- **`apps/api/auth`**：自旧私有 `api` 项目 的 `src/auth` 迁入的**访问控制模块**（`AuthModule`），只含管理端控制器：
   角色 `/auth/role`、用户 `/auth/user`、令牌 `/auth/token`，全部用 `@Allow('admin')` 声明所需角色（鉴权由全局 `TokenGuard` 完成）。
   ⚠️ 旧项目里的**分类（`category`）与产品（`product`）不迁移**，别照旧目录补回来。
   管理端建号/改资料走 `UserService.create` / `update` 的**覆盖实现**（用户名归一化 + 密码哈希 + 邮箱空串转 NULL），
   DTO 是 `shared/user/user.dto.ts` 的 `UserManageCreateDto` / `UserManageUpdateDto` —— 与个人端的 `UserUpdateDto` 刻意不同名，
   因为两者字段与权限边界完全不同（管理端含 `status` / `roles`）。管理端用户控制器类名叫 `AuthUserController`，
   避免与个人端 `UserController` 重名（`reqs.controller` 按类名记账，重名会让两类请求在日志里分不开）。
-- **`apps/api/cloud`**：自旧私有项目 `marbleqi/api` 的 `src/cloud`（密钥）与 `src/kong`（KONG 站点）**合并**迁入的云服务模块（`CloudModule`），
+- **`apps/api/cloud`**：自旧私有 `api` 项目 的 `src/cloud`（密钥）与 `src/kong`（KONG 站点）**合并**迁入的云服务模块（`CloudModule`），
   接口前缀统一为 `cloud/`（`/cloud/key`、`/cloud/kong`，另有两个探测接口 `summary/:id`、`plugin/:id`），全部 `@Allow('admin')`。
   四条与旧项目**刻意不同**的约定，别按旧代码「改回去」：
   1. **密钥 secret 不出库**：`KeyService.index` / `show` 都走 `PUBLIC_SELECT`（不含 `secret`），详情也不回填；服务端内部要用时才调
@@ -63,7 +63,7 @@
      `{"message":"Not found"}`。`KongService.summary()` 并行取 `/`（version / edition / hostname / node_id / lua_version / 插件数）与
      `/status`（连接数 / `database.reachable`），合并成 `KongSummary` 下发；无数据库模式（DB-less）时 `database` 段不存在，`dbReachable` 给 `null`（不适用），
      与 `false`（不可达）分开。`/plugins/enabled` 在 3.x 返回 **`{ enabled_plugins: [...] }`**（2.x 才是数组），`KongService.plugin()` 统一成 `string[]`。
-- **`apps/api/tencent`**：自旧私有项目 `marbleqi/api` 的 `src/tencent` 迁入的**腾讯云模块**（`TencentModule`），
+- **`apps/api/tencent`**：自旧私有 `api` 项目 的 `src/tencent` 迁入的**腾讯云模块**（`TencentModule`），
   接口前缀 `tencent/`（`ssl` / `dns` / `domain` / `cdn` / `firewall` / `lighthouse`），全部 `@Allow('admin')`；
   依赖 `CloudModule` —— `KeyService` 取密钥、`KongService` + `ObjectService` 把 SSL 证书部署到 KONG 站点。约定：
   1. **签名是纯函数，且有官方示例向量兜底**：`api/api.sign.ts` 只管算（`canonicalRequestOf` / `stringToSignOf` /
@@ -91,7 +91,7 @@
   7. 旧方法上的 `@UsePipes(new ValidationPipe())` 已去掉：全局 `APP_PIPE` 就是 `ValidationPipe({whitelist:true})`，方法级那个既多余，
      又不带 `whitelist`（两套口径并存容易误判）。
   8. 旧的 `@cloud` / `@kong` / `@tencent` 路径别名不迁移：本仓库只有 `@shared` 一个别名，模块间走相对路径（必须带 `.js`）。
-- **`apps/api/admin`**：自旧私有项目 `marbleqi/api` 的 `src/admin` 迁入的**管理员模块**（`AdminModule`），
+- **`apps/api/admin`**：自旧私有 `api` 项目 的 `src/admin` 迁入的**管理员模块**（`AdminModule`），
   只保留管理端自用的四块：系统配置 `admin/setting`、邮件配置 `admin/email`、操作日志 `admin/operate`、请求日志 `admin/req`，
   全部 `@Allow('admin')`。
   旧 `src/admin/key`、`src/admin/kong`、`src/admin/kong/object` **不在这里** —— 它们已并入 `cloud` 模块（接口前缀 `cloud/`），别按旧目录补回来。
@@ -116,7 +116,7 @@
      改为按配置指纹 + 60 秒 TTL 懒加载；保存后控制器调 `invalidate()` 立即生效（多实例最迟 TTL 到期跟进）。
      ③ `EmailService.send()` 由「返回 `1/0`」改为**失败抛异常** —— 旧调用方（`UserService`）从不看返回值，
      SMTP 认证失败会被静默当成「验证码已发送」，这是修缺陷不是行为回退。
-- **`apps/api/data`**：**新建**的行情数据模块（`DataModule`），照 almanac 桌面端的语义重实现（不是从旧私有 `marbleqi/api/src/data` 搬代码，
+- **`apps/api/data`**：**新建**的行情数据模块（`DataModule`），照 almanac 桌面端的语义重实现（不是从旧私有 `api` 仓库的 `src/data` 搬代码，
   那里是 NestJS 11 单表模型，与本仓库 12 + ESM + vitest 不同）。目录：`data/source/`（baostock 裸 TCP 协议层）、
   `data/sync/`（同步引擎：计划 + 4 同步器 + 台账）、`data/entities/`（7 张行情表实体 + DDL）、`data/`（gateway + 同步控制器 + 查询控制器）。
   关键约定：

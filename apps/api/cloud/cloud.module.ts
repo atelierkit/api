@@ -15,7 +15,7 @@ import { ObjectService } from './kong/object/object.service.js';
 /**
  * 云服务模块
  *
- * 注：自旧私有项目 `marbleqi/api` 的 `src/cloud`（密钥）与 `src/kong`（站点）合并迁入，
+ * 注：自旧私有 `api` 项目 的 `src/cloud`（密钥）与 `src/kong`（站点）合并迁入，
  * 两者在页面上同属「云服务」一个导航区，故收在同一个模块里；全部接口用 `@Allow('admin')` 声明
  * 所需角色，鉴权由全局 `TokenGuard` 完成。旧项目里按云厂商（tencent / aliyun）分的业务模块不迁移
  */

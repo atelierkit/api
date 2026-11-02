@@ -1,6 +1,6 @@
 # 证券宝接口调用策略对照审计（开源 `api` ← 私有 `api`）
 
-> 对照对象：私有 `D:\github\marbleqi\api\src\data\api\api.service.ts`（660 行单类）与
+> 对照对象：私有 `api` 仓库的 `src/data/api/api.service.ts`（660 行单类）与
 > 开源 `apps/api/data/source/*` + `apps/api/data/sync/*`。
 > 结论一句话：**开源侧的协议层实现确实优于私有侧，不必回退；但连接生命周期、重试覆盖面、
 > 运行编排三处出现倒退或缺失，共 10 项可优化，其中 4 项是确定性缺陷。**

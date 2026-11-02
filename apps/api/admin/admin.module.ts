@@ -10,7 +10,7 @@ import { AdminSettingController } from './setting/setting.controller.js';
 /**
  * 管理员模块
  *
- * 注 1：自旧私有项目 `marbleqi/api` 的 `src/admin` 迁入，只保留管理端自用的四块
+ * 注 1：自旧私有 `api` 项目 的 `src/admin` 迁入，只保留管理端自用的四块
  * （系统配置 / 邮件配置 / 操作日志 / 请求日志）；旧项目的 `admin/key`、`admin/kong`、`admin/kong/object`
  * 已并入 `cloud` 模块（接口前缀 `cloud/`），别在这里补回来
  * 注 2：接口一律 `@Allow('admin')`，鉴权由全局 `TokenGuard` 完成；四块都读 `SharedModule`

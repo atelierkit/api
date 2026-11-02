@@ -13,7 +13,7 @@ import { SslController } from './ssl/ssl.controller.js';
 /**
  * 腾讯云模块
  *
- * 注 1：自旧私有项目 `marbleqi/api` 的 `src/tencent` 迁入，接口前缀统一为 `tencent/`，
+ * 注 1：自旧私有 `api` 项目 的 `src/tencent` 迁入，接口前缀统一为 `tencent/`，
  * 全部用 `@Allow('admin')` 声明所需角色（鉴权由全局 `TokenGuard` 完成）
  * 注 2：依赖 `CloudModule` 的两个服务 —— `KeyService` 取访问密钥（Secret 只在服务端用）、
  * `KongService` / `ObjectService` 用于把 SSL 证书部署到 KONG 站点

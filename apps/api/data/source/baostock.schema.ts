@@ -6,7 +6,7 @@
  *
  * 本文件是协议的「唯一事实来源」：端口、版本号、消息类型编号、记录位 / 列名位、错误码、列名
  * 都只在这里写一次。数值全部来自 almanac 桌面端（`BaostockProtocol` / `BaostockFields`）与
- * 旧私有 `marbleqi/api`（`BAOSTOCK_CONST`）两处相互印证过的真机抓包结论。
+ * 旧私有 `api` 项目（`BAOSTOCK_CONST`）两处相互印证过的真机抓包结论。
  */
 
 /** 服务端主机名 */

@@ -161,7 +161,7 @@ describe('KongService', () => {
         '8001/': {
           version: '3.9.4',
           edition: 'community',
-          hostname: 'home-server',
+          hostname: 'kong-host',
           node_id: 'node-1',
           lua_version: 'LuaJIT 2.1',
           plugins: {
@@ -179,7 +179,7 @@ describe('KongService', () => {
       expect(await service.summary(1)).toEqual({
         version: '3.9.4',
         edition: 'community',
-        hostname: 'home-server',
+        hostname: 'kong-host',
         nodeId: 'node-1',
         luaVersion: 'LuaJIT 2.1',
         pluginCount: 2,

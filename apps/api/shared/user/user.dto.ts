@@ -59,6 +59,16 @@ export class LoginDto {
   @IsString({ message: '密码格式不正确！' })
   @IsNotEmpty({ message: '密码不能为空！' })
   password!: string;
+
+  /**
+   * 设备标识
+   *
+   * 注 1：由客户端生成并在本地持久化，同一设备重复登录只保留一个令牌，不同设备互不影响
+   * 注 2：不做格式强校验 —— 这个值只用于会话归组，格式非法时归入统一分组即可，不该阻断登录
+   */
+  @IsOptional()
+  @IsString({ message: '设备标识格式不正确！' })
+  deviceId?: string;
 }
 
 /** 用户名查重DTO */

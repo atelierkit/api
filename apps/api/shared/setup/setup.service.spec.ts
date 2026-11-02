@@ -246,11 +246,13 @@ describe('SetupService', () => {
       expect(dataSource.transaction).toHaveBeenCalledTimes(1);
       expect(redis.set).toHaveBeenCalledWith('init', '1');
       // 初始化成功即完成登录，前端不需要再走一次登录接口
+      // 注：入参未带设备标识，按统一分组签发
       expect(userSrv.issueToken).toHaveBeenCalledWith(
         7,
         'setup',
         88,
         '1.2.3.4',
+        'unreported',
       );
       expect(result).toEqual({ code: 'TOKEN' });
 

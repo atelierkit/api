@@ -84,7 +84,7 @@ export class PassportController {
    *
    * 注：仅在系统未初始化时可用，成功后直接返回令牌（等同完成登录）
    *
-   * @param value 管理员信息
+   * @param value 管理员信息，注：含客户端生成的设备标识
    * @param token 初始化凭据，注：请求头 X-Setup-Token
    * @param req 请求上下文，注：用于取直连对端地址做来源校验
    * @param ip 客户端IP
@@ -107,7 +107,7 @@ export class PassportController {
   /**
    * 用户名密码登录
    *
-   * @param value 登录信息
+   * @param value 登录信息，注：含客户端生成的设备标识，同一设备的重复登录只保留一个令牌
    * @param ip 客户端IP
    * @param reqId 请求ID
    * @returns 令牌信息

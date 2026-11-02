@@ -12,6 +12,7 @@ import { timingSafeEqual } from 'crypto';
 import { RetryAfterException } from '../common/retry-after.exception.js';
 import { RedisService } from '../redis/redis.service.js';
 import { SettingEntity } from '../setting/setting.entity.js';
+import { normalizeDevice } from '../token/token.util.js';
 import { hashPassword } from '../user/password.util.js';
 import { UserEntity } from '../user/user.entity.js';
 import { UserService } from '../user/user.service.js';
@@ -153,7 +154,13 @@ export class SetupService {
     await this.redisSrv.set(SETUP_CACHE_KEY, '1');
     this.logger.log(`系统已完成初始化，管理员：${username}`);
     // 初始化成功即签发令牌，前端不需要再走一次登录
-    return this.userSrv.issueToken(adminId, 'setup', reqId, ip || peerIp);
+    return this.userSrv.issueToken(
+      adminId,
+      'setup',
+      reqId,
+      ip || peerIp,
+      normalizeDevice(value.deviceId),
+    );
   }
 
   /**
@@ -219,7 +226,10 @@ export class SetupService {
       }
     }
     // IPv6 唯一本地地址 fc00::/7 与链路本地 fe80::/10
-    if (/^f[cd][0-9a-f]{2}:/i.test(address) || /^fe[89ab][0-9a-f]:/i.test(address)) {
+    if (
+      /^f[cd][0-9a-f]{2}:/i.test(address) ||
+      /^fe[89ab][0-9a-f]:/i.test(address)
+    ) {
       return true;
     }
     return false;

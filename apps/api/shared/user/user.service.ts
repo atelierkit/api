@@ -25,7 +25,12 @@ import { QueueService } from '../queue/queue.service.js';
 import { RedisService } from '../redis/redis.service.js';
 import { fileStorage } from '../storage/local.storage.js';
 import { toPublicUrl, toStorageKey } from '../storage/storage.util.js';
-import { TOKEN_VALIDS, TOKEN_VALID_DEFAULT } from '../token/token.constant.js';
+import {
+  TOKEN_DEVICE_MAX,
+  TOKEN_VALIDS,
+  TOKEN_VALID_DEFAULT,
+} from '../token/token.constant.js';
+import { normalizeDevice, sameDevice } from '../token/token.util.js';
 import { DUMMY_HASH, hashPassword, verifyPassword } from './password.util.js';
 import {
   CHECK_LIMIT_PER_MINUTE,
@@ -529,21 +534,77 @@ export class UserService extends CommonService<UserEntity, UserLogEntity> {
    * 清理用户令牌
    *
    * @param userId 用户ID
-   * @param keep 需要保留的令牌，注：形如 `<用户ID>:<随机码>`，改密时用于保留当前会话
+   * @param options 清理选项
+   * @param options.device 只清理该设备的令牌，注：不传表示清理该用户的全部令牌
+   * @param options.keep 需要保留的令牌，注：形如 `<用户ID>:<随机码>`，改密时用于保留当前会话
    * @returns 清理的令牌数
    */
   private async purgeTokens(
     userId: number,
-    keep: string = '',
+    options: { device?: string; keep?: string } = {},
   ): Promise<number> {
     /** 该用户全部令牌键，注：采用 scan 游标遍历，避免 keys 命令阻塞缓存服务 */
     const keys = await this.redisSrv.scanKeys(`token:${userId}:*`);
     /** 待删除令牌键 */
-    const targets = keep ? keys.filter((key) => key !== `token:${keep}`) : keys;
+    const targets: string[] = [];
+    for (const key of keys) {
+      // 保留当前会话
+      if (options.keep && key === `token:${options.keep}`) {
+        continue;
+      }
+      // 限定在单一设备内，注：其它设备的登录不受影响；无设备字段的旧令牌视为可清理
+      if (options.device) {
+        /** 令牌详情 */
+        const token = await this.redisSrv.hgetall(key);
+        if (!sameDevice(token.device, options.device)) {
+          continue;
+        }
+      }
+      targets.push(key);
+    }
     if (!targets.length) {
       return 0;
     }
     // 以管道批量清理，避免逐条串行等待
+    const pipeline = this.redisSrv.pipeline();
+    targets.forEach((key) => pipeline.del(key));
+    await pipeline.exec();
+    return targets.length;
+  }
+
+  /**
+   * 约束单用户的并发设备数
+   *
+   * 注：设备标识由客户端生成，清缓存、换浏览器或换设备都会换出一个新标识；
+   * 若不设上限，长期有效的令牌会无界堆积，故超出上限时按创建时间淘汰最旧的会话
+   *
+   * @param userId 用户ID
+   * @param keep 本次签发的令牌，注：形如 `<用户ID>:<随机码>`，即使它排在最旧位置也不淘汰
+   * @returns 淘汰的令牌数
+   */
+  private async trimTokens(userId: number, keep: string): Promise<number> {
+    /** 该用户全部令牌键，注：采用 scan 游标遍历，避免 keys 命令阻塞缓存服务 */
+    const keys = await this.redisSrv.scanKeys(`token:${userId}:*`);
+    if (keys.length <= TOKEN_DEVICE_MAX) {
+      return 0;
+    }
+    /** 令牌键与创建时间 */
+    const rows: { key: string; createAt: number }[] = [];
+    for (const key of keys) {
+      /** 令牌详情 */
+      const token = await this.redisSrv.hgetall(key);
+      rows.push({ key, createAt: Number(token.createAt) || 0 });
+    }
+    // 按创建时间升序，最旧的会话优先淘汰
+    rows.sort((a, b) => a.createAt - b.createAt);
+    /** 待淘汰令牌键 */
+    const targets = rows
+      .map((row) => row.key)
+      .filter((key) => key !== `token:${keep}`)
+      .slice(0, keys.length - TOKEN_DEVICE_MAX);
+    if (!targets.length) {
+      return 0;
+    }
     const pipeline = this.redisSrv.pipeline();
     targets.forEach((key) => pipeline.del(key));
     await pipeline.exec();
@@ -574,13 +635,14 @@ export class UserService extends CommonService<UserEntity, UserLogEntity> {
   /**
    * 签发登录令牌
    *
-   * 注：登录成功后统一走这里 —— 清旧令牌、写登录统计、记操作日志、签发新令牌，
+   * 注：登录成功后统一走这里 —— 清该设备的旧令牌、写登录统计、记操作日志、签发新令牌，
    * 首次初始化与密码登录共用同一套语义
    *
    * @param userId 用户ID
    * @param operate 操作类型，注：login 或 setup
    * @param reqId 请求日志ID
    * @param ip 客户端IP
+   * @param device 客户端上报的设备标识，注：缺失时归入统一分组
    * @returns 令牌信息
    */
   async issueToken(
@@ -588,6 +650,7 @@ export class UserService extends CommonService<UserEntity, UserLogEntity> {
     operate: string,
     reqId: number = 0,
     ip: string = '',
+    device: string = '',
   ) {
     /** 用户 */
     const user = await this.userRepository.findOne({
@@ -607,8 +670,11 @@ export class UserService extends CommonService<UserEntity, UserLogEntity> {
     if (!user.status) {
       throw new ForbiddenException('用户已被禁用！');
     }
-    // 清理该用户的全部旧令牌（单会话策略）
-    await this.purgeTokens(user.id);
+    // 清理该设备上的旧令牌，注：只清理本设备 —— 同一设备重复登录仍只保留一个令牌，
+    // 电脑、手机等其它设备的会话不受影响
+    /** 设备标识，注：客户端缺失或乱填时归入统一分组 */
+    const deviceId = normalizeDevice(device);
+    await this.purgeTokens(user.id, { device: deviceId });
     /** 创建操作序号 */
     const operateId = await this.operateSrv.create('user', operate, user.id);
     /** 是否首次登录 */
@@ -639,10 +705,23 @@ export class UserService extends CommonService<UserEntity, UserLogEntity> {
     this.addLog(operateId);
     // 按用户设置的有效期签发令牌，注：0 表示长期有效
     const valid = this.normalizeValid(user.tokenValid);
-    return this.redisSrv.addCode(`token:${user.id}`, 60, valid, {
+    /** 令牌信息 */
+    const token = await this.redisSrv.addCode(`token:${user.id}`, 60, valid, {
       id: user.id,
       valid,
     });
+    /**
+     * 令牌缓存键
+     *
+     * 注：键格式保持 `token:<用户ID>:<随机码>` 不变 —— 设备标识只作为哈希字段保存，
+     * 请求头、令牌守卫、刷新与登出的语义都不受影响
+     */
+    const key = `token:${user.id}:${token.code}`;
+    // 补写设备标识，注：管理端据此区分会话归属，登录时按它清理同一设备的旧令牌
+    await this.redisSrv.hmset(key, 'device', deviceId);
+    // 约束并发设备数，注：keep 传本次新签发的令牌，避免它自己被当作最旧会话淘汰
+    await this.trimTokens(user.id, `${user.id}:${token.code}`);
+    return token;
   }
 
   /**
@@ -671,7 +750,7 @@ export class UserService extends CommonService<UserEntity, UserLogEntity> {
    * 注：失败一律返回「用户名或密码不正确」，账号不存在时也跑一次等价耗时的假校验，
    * 避免通过文案或响应时间探测账号是否存在
    *
-   * @param value 登录信息
+   * @param value 登录信息，注：含客户端生成的设备标识
    * @param reqId 请求日志ID
    * @param ip 客户端IP
    * @returns 令牌信息
@@ -736,7 +815,13 @@ export class UserService extends CommonService<UserEntity, UserLogEntity> {
     }
     // 登录成功，清空失败计数
     await this.redisSrv.del(`loginFail:${username}`);
-    return this.issueToken(user.id, 'login', reqId, ip);
+    return this.issueToken(
+      user.id,
+      'login',
+      reqId,
+      ip,
+      normalizeDevice(value.deviceId),
+    );
   }
 
   /**
@@ -799,7 +884,7 @@ export class UserService extends CommonService<UserEntity, UserLogEntity> {
     // 追加日志
     this.addLog(operateId);
     // 保留当前会话，作废其它会话
-    const purged = await this.purgeTokens(id, token);
+    const purged = await this.purgeTokens(id, { keep: token });
     return {
       code: 0,
       msg: purged

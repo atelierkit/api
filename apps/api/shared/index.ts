@@ -5,6 +5,7 @@ export * from './common/common.util.js';
 export * from './common/secret.util.js';
 export * from './email/email.config.js';
 export * from './token/token.constant.js';
+export * from './token/token.util.js';
 export * from './storage/storage.constant.js';
 export * from './storage/storage.util.js';
 export * from './storage/local.storage.js';

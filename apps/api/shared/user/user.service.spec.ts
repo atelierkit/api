@@ -16,6 +16,7 @@ import { EmailService } from '../email/email.service.js';
 import { OperateService } from '../operate/operate.service.js';
 import { QueueService } from '../queue/queue.service.js';
 import { RedisService } from '../redis/redis.service.js';
+import { TOKEN_DEVICE_MAX } from '../token/token.constant.js';
 import { hashPassword } from './password.util.js';
 import {
   LOGIN_FAIL_MAX,
@@ -960,5 +961,101 @@ describe('UserService', () => {
       // 管理端编辑弹窗回填的就是这个地址，反解回 key 才能保证「库里只存 key」
       expect(value.avatar).toBe('avatar/new.webp');
     });
+  });
+});
+
+/**
+ * 多设备登录
+ *
+ * 注：令牌键仍是 `token:<用户ID>:<随机码>`，设备标识只作为哈希字段保存；
+ * 登录时只清理同一设备的旧令牌，其它设备（电脑、手机）保持在线
+ */
+describe('UserService 多设备登录', () => {
+  /**
+   * 构造带密码哈希的登录用户
+   *
+   * @returns 登录查询用的用户记录
+   */
+  function loggedUser() {
+    return { ...USER, password: HASH };
+  }
+
+  it('登录只清理同一设备的旧令牌，其它设备保持在线', async () => {
+    /** 被测服务 */
+    const { service, repository, redis } = serviceOf();
+    repository.findOne.mockResolvedValue(loggedUser());
+    // 三条会话：本设备（手机）、另一设备（电脑）、改造前没有设备字段的旧令牌
+    redis.scanKeys.mockResolvedValue(['token:1:a', 'token:1:b', 'token:1:c']);
+    redis.hgetall.mockImplementation(async (key: string) => {
+      if (key === 'token:1:a') {
+        return { device: 'phone0001' };
+      }
+      if (key === 'token:1:b') {
+        return { device: 'pc000001' };
+      }
+      return {};
+    });
+    /** 清理管道替身 */
+    const pipeline = { del: vi.fn(), exec: vi.fn(async () => []) };
+    redis.pipeline.mockReturnValue(pipeline);
+
+    await service.login(
+      { username: 'admin', password: 'abc12345', deviceId: 'phone0001' },
+      0,
+      '1.2.3.4',
+    );
+
+    /** 实际被删掉的令牌键 */
+    const deleted = pipeline.del.mock.calls.map((call) => call[0]);
+    // 手机端的旧令牌与没有设备字段的旧令牌被清理，电脑端保持在线
+    expect(deleted).toEqual(['token:1:a', 'token:1:c']);
+  });
+
+  it('未上报设备标识时归入统一分组，并把设备标识写入令牌', async () => {
+    /** 被测服务 */
+    const { service, repository, redis } = serviceOf();
+    repository.findOne.mockResolvedValue(loggedUser());
+    redis.addCode.mockResolvedValue({ code: 'NEWCODE' });
+
+    await service.login({ username: 'admin', password: 'abc12345' });
+
+    // 缓存键格式保持不变，令牌结构不受设备策略影响
+    expect(redis.addCode).toHaveBeenCalledWith('token:1', 60, 1440, {
+      id: 1,
+      valid: 1440,
+    });
+    // 设备标识单独补写，管理端据此区分会话归属
+    expect(redis.hmset).toHaveBeenCalledWith(
+      'token:1:NEWCODE',
+      'device',
+      'unreported',
+    );
+  });
+
+  it('会话数超过上限时淘汰创建时间最旧的令牌', async () => {
+    /** 被测服务 */
+    const { service, repository, redis } = serviceOf();
+    repository.findOne.mockResolvedValue(loggedUser());
+    /** 已存在的会话键，注：比上限多一个 */
+    const keys = Array.from(
+      { length: TOKEN_DEVICE_MAX + 1 },
+      (_, i) => `token:1:old${i}`,
+    );
+    redis.scanKeys.mockResolvedValue(keys);
+    redis.hgetall.mockImplementation(async (key: string) => ({
+      // 都是其它设备，登录时不参与清理
+      device: `other${key.slice(-1)}`,
+      // 序号即创建顺序，old0 最旧
+      createAt: String(1000 + Number(key.slice(-1))),
+    }));
+    /** 清理管道替身 */
+    const pipeline = { del: vi.fn(), exec: vi.fn(async () => []) };
+    redis.pipeline.mockReturnValue(pipeline);
+
+    await service.login({ username: 'admin', password: 'abc12345' });
+
+    /** 实际被删掉的令牌键 */
+    const deleted = pipeline.del.mock.calls.map((call) => call[0]);
+    expect(deleted).toEqual(['token:1:old0']);
   });
 });

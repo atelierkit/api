@@ -9,6 +9,9 @@ import { RedisService } from '../redis/redis.service.js';
  *
  * 令牌属于经常被使用，而且修改频繁的对象
  * 后端采用Redis存储的方式（以支持多后端实例同时运行的情况）
+ *
+ * 注：缓存键形如 `token:<用户ID>:<随机码>`，请求头 `token` 的取值即键去掉 `token:` 前缀后的部分；
+ * 设备标识作为哈希中的 `device` 字段保存，用于「每个设备只保留一个令牌」
  */
 @Injectable()
 export class TokenService {

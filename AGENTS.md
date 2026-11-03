@@ -120,6 +120,34 @@
      cluster 级 list 权限，权限不足时给 403 由用户自行降级（不做「悄悄少几块」的兜底）。
   9. **证书 PEM 校验复用 `docker/docker.cert.ts`**：它只依赖 `node:crypto`，与 Docker 协议无关；
      新建 / 换证书时先校验「一张证书 + 可解析 + 与私钥配对」，别等握手时报 `key values mismatch`。
+- **`apps/api/cloud/remote`**：**新建**的远程连接模块（2026-11-03），只做 **Linux 的 SSH**（不接 Windows / RDP）。
+  表 `remotes` / `remotes_logs` 存主机与凭据，接口前缀 `cloud/remote`，全部 `@Allow('admin')`；
+  终端数据面走 **WebSocket 命名空间 `/remote`**（`RemoteGateway`），是本仓库第一处 WS 业务网关。十一条约定：
+  1. **浏览器不碰 SSH 协议**：建连、认证、PTY、指纹校验全在 api（`ssh2`），前端只经 WS 换原始字节。
+     新增依赖仅 `ssh2`（纯 JS，alpine 无需原生编译；可选 `cpu-features` 编译失败会被忽略，属正常）。
+  2. **WS 不受 `TokenGuard` 保护** —— 它只处理 `switchToHttp()`。故用**一次性票据**：`POST /cloud/remote/ticket`
+     在 HTTP 侧完成「令牌 + admin 角色」校验后签发（60 秒、一次性、绑定 userId），`RemoteGateway` 只认票。
+     另外 `handleConnection` 仍自行验一遍令牌、用户启用状态与 `admin` 角色（纵深防御，别删）。
+  3. **`ssh2` 的客户端通过工厂注入**（令牌 `SSH_CLIENT`，见 `cloud.module.ts`）：会话层与网关的测试要能塞
+     EventEmitter 替身，而 ssh2 的连接行为在 ESM 下没法打桩。`RemoteSshService` 只负责「回调 → Promise」与错误归类。
+  4. **主机指纹 TOFU**：`hostVerifier` 默认放行等于给中间人开门。空指纹 → 握手**成功后**回写（`rememberFingerprint`），
+     记录过就必须一致；不一致时 verifier 返回 false，让 ssh2 在**认证之前**中止（绝不把密码发给未经验证的主机）。
+     `diagnose` 只读、不写指纹；用户确认后走 `POST /trust`（会照常进变更历史）。
+  5. **`fingerprint` 不能走普通更新**：`RemoteUpdateDto` 虽收了它，服务层刻意忽略 —— 否则前端一次普通保存
+     就能把「指纹已变更」的告警静默抹掉。
+  6. **输出侧必须背压**：16ms 聚合 + 32KB 分帧 + `socket.conn.writeBuffer` 水位（>64 帧 `pause()`、<8 帧 `resume()`）。
+     不做这一步，`cat` 大文件会把 socket.io 缓冲一路涨到浏览器 OOM。⚠️ `writeBuffer` 是 socket.io 内部字段，升级要复查。
+  7. **传输原始字节，不转码**：`Buffer` 直接下发，前端用 `TextDecoder(charset, {stream:true})` 解码
+     （`stream` 是 `decode()` 的参数，写进构造会类型报错）。一个汉字可能跨两帧，逐帧解码必乱码。
+     主机上的 `charset` 列（`utf-8` / `gb18030`）就是为 locale 仍是 GBK 的老系统准备的。
+  8. **凭据三列加密、永不下发**：`password` / `private_key` / `passphrase` 存 `enc:v1:` 密文，`view()` 清空并回
+     `hasPassword` / `hasKey` / `hasPassphrase`；编辑时 `''` 或 `***` 都表示不修改，**切鉴权方式时才显式清另一套**。
+  9. **私钥在保存时就解析**（`remote.key.ts`）：`crypto.createPrivateKey` 拦下口令错 / 格式错，`.ppk` 直接给转换命令。
+     别等到连接时才看到 OpenSSL 的 `bad decrypt` —— 用户不知道是哪个框填错了。
+  10. **会话上限与超时在内存里**（`RemoteSessionService`）：单用户 5 / 全局 20 / 单主机 4，空闲 30 分钟、最长 8 小时；
+      `onGatewayDisconnect` 必须真正 `end()` SSH（只从 Map 删引用不会断 TCP，目标机 `who` 里会留残留会话）。
+  11. **不要把握手成功前的指纹写库**，也不要把「最后连接时间」放主表（`CommonService.update` 会把整行搬日志表，
+      每连一次就多一条变更历史）。模块 DDL 见 `deploy/remotes-module.ddl.sql`（docker / kubernetes 的 DDL 仍只在工控机上）。
 - **`apps/api/tencent`**：自旧私有 `api` 项目 的 `src/tencent` 迁入的**腾讯云模块**（`TencentModule`），
   接口前缀 `tencent/`（`ssl` / `dns` / `domain` / `cdn` / `firewall` / `lighthouse`），全部 `@Allow('admin')`；
   依赖 `CloudModule` —— `KeyService` 取密钥、`KongService` + `ObjectService` 把 SSL 证书部署到 KONG 站点。约定：

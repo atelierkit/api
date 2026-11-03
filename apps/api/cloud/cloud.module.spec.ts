@@ -16,9 +16,14 @@ import { KubernetesController } from './kubernetes/kubernetes.controller.js';
 import { KubernetesService } from './kubernetes/kubernetes.service.js';
 import { KubernetesObjectController } from './kubernetes/object/object.controller.js';
 import { KubernetesObjectService } from './kubernetes/object/object.service.js';
+import { RemoteController } from './remote/remote.controller.js';
+import { RemoteGateway } from './remote/remote.gateway.js';
+import { RemoteService } from './remote/remote.service.js';
+import { RemoteSessionService } from './remote/remote.session.js';
+import { SSH_CLIENT, RemoteSshService } from './remote/remote.ssh.js';
 
 describe('CloudModule', () => {
-  it('密钥 / KONG / Docker / Kubernetes 四套控制器与服务都在模块里注册（少登记一个就是整块接口 404）', () => {
+  it('密钥 / KONG / Docker / Kubernetes / 远程连接五套控制器都在模块里注册（少登记一个就是整块接口 404）', () => {
     expect(Reflect.getMetadata('controllers', CloudModule)).toEqual([
       KeyController,
       KongController,
@@ -27,19 +32,37 @@ describe('CloudModule', () => {
       DockerObjectController,
       KubernetesController,
       KubernetesObjectController,
+      RemoteController,
     ]);
-    expect(Reflect.getMetadata('providers', CloudModule)).toEqual([
-      KeyService,
-      KongService,
-      ObjectService,
-      DockerService,
-      DockerObjectService,
-      KubernetesService,
-      KubernetesObjectService,
-    ]);
+    expect(Reflect.getMetadata('providers', CloudModule)).toEqual(
+      expect.arrayContaining([
+        KeyService,
+        KongService,
+        ObjectService,
+        DockerService,
+        DockerObjectService,
+        KubernetesService,
+        KubernetesObjectService,
+        RemoteService,
+        RemoteSshService,
+        RemoteSessionService,
+        RemoteGateway,
+      ]),
+    );
   });
 
-  it('七个服务对外导出（后续按云厂商拆模块时可直接复用）', () => {
+  it('WebSocket 网关与 SSH 客户端工厂都注册在提供者里（漏了网关，终端握手会 404）', () => {
+    /** 提供者清单 */
+    const providers = Reflect.getMetadata('providers', CloudModule) as unknown[];
+    expect(providers).toContain(RemoteGateway);
+    expect(
+      providers.some(
+        (item) => (item as { provide?: unknown } | null)?.provide === SSH_CLIENT,
+      ),
+    ).toBe(true);
+  });
+
+  it('服务对外导出（后续按云厂商拆模块时可直接复用）', () => {
     expect(Reflect.getMetadata('exports', CloudModule)).toEqual([
       KeyService,
       KongService,
@@ -48,6 +71,7 @@ describe('CloudModule', () => {
       DockerObjectService,
       KubernetesService,
       KubernetesObjectService,
+      RemoteService,
     ]);
   });
 });

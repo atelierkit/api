@@ -1,6 +1,7 @@
 // 外部依赖
 import { Module } from '@nestjs/common';
 import { TypeOrmModule } from '@nestjs/typeorm';
+import { Client } from 'ssh2';
 // 内部依赖
 import { SharedModule } from '@shared';
 import { DockerController } from './docker/docker.controller.js';
@@ -24,6 +25,13 @@ import {
 import { KubernetesService } from './kubernetes/kubernetes.service.js';
 import { KubernetesObjectController } from './kubernetes/object/object.controller.js';
 import { KubernetesObjectService } from './kubernetes/object/object.service.js';
+import { RemoteController } from './remote/remote.controller.js';
+import { RemoteEntity, RemoteLogEntity } from './remote/remote.entity.js';
+import { RemoteGateway } from './remote/remote.gateway.js';
+import { RemoteService } from './remote/remote.service.js';
+import { RemoteSessionService } from './remote/remote.session.js';
+import { SSH_CLIENT, RemoteSshService } from './remote/remote.ssh.js';
+import type { SshClientLike } from './remote/remote.ssh.js';
 
 /**
  * 云服务模块
@@ -33,6 +41,8 @@ import { KubernetesObjectService } from './kubernetes/object/object.service.js';
  * 所需角色，鉴权由全局 `TokenGuard` 完成。旧项目里按云厂商（tencent / aliyun）分的业务模块不迁移。
  * 2026-11-03 新增 `docker`（宿主机管理），与 KONG 站点同一套「站点 + 站点下资源」的组织方式；
  * 同日新增 `kubernetes`（集群管理），沿用同一套组织方式，凭据改为 Token / 客户端证书
+ * 同日新增 `remote`（远程连接），沿用同一套组织方式，且是全仓库第一处 WebSocket 业务网关
+ * （数据面走 `/remote` 命名空间，鉴权靠自己校验握手令牌，见 `RemoteGateway`）
  */
 @Module({
   imports: [
@@ -46,6 +56,8 @@ import { KubernetesObjectService } from './kubernetes/object/object.service.js';
       DockerLogEntity,
       KubernetesEntity,
       KubernetesLogEntity,
+      RemoteEntity,
+      RemoteLogEntity,
     ]),
   ],
   providers: [
@@ -56,6 +68,16 @@ import { KubernetesObjectService } from './kubernetes/object/object.service.js';
     DockerObjectService,
     KubernetesService,
     KubernetesObjectService,
+    RemoteService,
+    RemoteSshService,
+    RemoteSessionService,
+    RemoteGateway,
+    // 注：`ssh2` 的客户端通过工厂注入，让会话层与网关的测试能塞一个 EventEmitter 替身
+    // （ssh2 的连接行为无法在 ESM 下打桩，而会话生命周期恰恰最需要单测）
+    {
+      provide: SSH_CLIENT,
+      useValue: () => new Client() as unknown as SshClientLike,
+    },
   ],
   controllers: [
     KeyController,
@@ -65,6 +87,7 @@ import { KubernetesObjectService } from './kubernetes/object/object.service.js';
     DockerObjectController,
     KubernetesController,
     KubernetesObjectController,
+    RemoteController,
   ],
   exports: [
     KeyService,
@@ -74,6 +97,7 @@ import { KubernetesObjectService } from './kubernetes/object/object.service.js';
     DockerObjectService,
     KubernetesService,
     KubernetesObjectService,
+    RemoteService,
   ],
 })
 export class CloudModule {}

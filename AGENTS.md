@@ -193,6 +193,14 @@
      synchronize 生成不了，须手工执行；执行由用户自己做（遵守「不直接改库」纪律）。
   8. **`bars` 4 个估值列（pe_ttm/pb_mrq/ps_ttm/pcf_ncf_ttm）必须 NULL 语义**：数据源空串表示无值，落 0 会让 PE/PB 全错且不报错。
   9. **涨跌色走 web 端 theme 变量**，后端不下发颜色语义，只下发原始数值。
+  10. **批量写入必须按参数预算分批**（`data/sync/write-chunk.ts` 的 `chunkRows`）：PostgreSQL 的 Bind 消息里
+     参数个数是 **Int16（硬上限 65535）**，`pg` 的 `addInt16` 对超出的值**静默截断**，服务端于是按
+     `参数数 mod 65536` 读格式码、把剩下的格式码当成参数个数，报成
+     `bind message has N parameter formats but 0 parameters` —— 文本与真实原因完全对不上，极难排查。
+     2026-11-03 线上事故：`bars` 每行 17 个绑定参数，2020-06-05 全市场 3857 只 = 65569 个参数（N = 33），
+     而前一天 3855 行 = 65535 恰好在线上，所以历史数据全都写进去了、只有这一天开始必然失败。
+     因此**所有 `Repository.upsert` 一律走 `SyncService.upsertInChunks`**（默认预算 30000 个参数，按实体列数折算每块行数），
+     不要再写成一次性全量；按交易日同步是一次写全市场（5000+ 行/天），上游没有分页可依赖。
 - **`@shared` 路径别名**：根 `tsconfig.json` 的 `paths` 声明 `@shared` → `apps/api/shared/index.ts`、`@shared/*` → `apps/api/shared/*`。
   `shared/` **之外**的代码（`app.module.ts` 等）用 `import { SharedModule } from '@shared'` 或 `@shared/<目录>/<文件>.js`；
   `shared/` **内部**仍用相对路径（保持目录可整体搬迁，也不引入循环依赖风险）。

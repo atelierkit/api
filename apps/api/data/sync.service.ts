@@ -8,6 +8,7 @@ import {
 } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { In, Repository } from 'typeorm';
+import type { ObjectLiteral } from 'typeorm';
 // 内部依赖
 import { QueueService } from '@shared';
 import { BaostockClient } from './source/baostock.client.js';
@@ -36,6 +37,7 @@ import { syncSecurities } from './sync/security.syncer.js';
 import { syncCalendar } from './sync/calendar.syncer.js';
 import type { ProgressReport } from './sync/progress.js';
 import type { SyncResult } from './sync/daily-batch.js';
+import { chunkRows, paramsPerRowOf } from './sync/write-chunk.js';
 
 /**
  * 行情数据同步服务：入队 / 暂停 / 快照 + 进程内消费段
@@ -401,23 +403,56 @@ export class SyncService implements OnApplicationBootstrap, OnModuleDestroy {
   }
 
   private async upsertSecurities(rows: SecurityEntity[]): Promise<number> {
-    const result = await this.securityRepo.upsert(rows, ['code']);
-    return result.identifiers.length;
+    return this.upsertInChunks(this.securityRepo, rows, ['code'], 8);
   }
 
   private async upsertCalendar(rows: TradeCalendarEntity[]): Promise<number> {
-    const result = await this.calendarRepo.upsert(rows, ['calendarDate']);
-    return result.identifiers.length;
+    return this.upsertInChunks(this.calendarRepo, rows, ['calendarDate'], 3);
   }
 
   private async upsertBars(rows: BarEntity[]): Promise<number> {
-    const result = await this.barRepo.upsert(rows, ['code', 'date']);
-    return result.identifiers.length;
+    return this.upsertInChunks(this.barRepo, rows, ['code', 'date'], 18);
   }
 
   private async upsertFactors(rows: AdjustFactorEntity[]): Promise<number> {
-    const result = await this.factorRepo.upsert(rows, ['code', 'operateDate']);
-    return result.identifiers.length;
+    return this.upsertInChunks(this.factorRepo, rows, ['code', 'operateDate'], 4);
+  }
+
+  /**
+   * 分批 upsert，返回累计提交行数
+   *
+   * ⚠ 为什么必须分批（2026-11-03 生产事故）：PostgreSQL 的 Bind 消息里参数个数是 Int16，
+   *   硬上限 65535；`pg` 驱动的 `addInt16` 超出后**静默截断**，服务端于是按
+   *   `参数数 mod 65536` 读格式码，剩下的格式码被当成参数个数 ⇒ 报
+   *   「bind message has 33 parameter formats but 0 parameters」，与真实原因完全对不上。
+   *   现场数据：`bars` 每行 17 个绑定参数，2020-06-05 全市场 3857 只 ⇒ 65569 个参数，
+   *   65569 − 65536 = 33 正是报错里的 33；前一天 3855 行 = 65535 恰好在线上，所以此前从没暴露。
+   *
+   * ⚠ 按交易日同步（`BarByDate` / `AdjustFactor`）是「一天一次全市场写入」，上游不会分页，
+   *   分批只能落在这一层；`Security` / `Calendar` 上游虽按 500 条分页，这里也一并收编，
+   *   避免以后有人把分页去掉又踩回来。
+   *
+   * ⚠ 分批会让「一天的写入」从单条语句的原子性变成多块各自提交：某块失败时，该日已提交的行
+   *   留在库里。这是可接受的 —— `runDailyBatch` 只在整天写完之后才推进台账，重跑会从同一断点
+   *   重新 upsert 把这天补齐（幂等），不会留下半天的脏台账。
+   *
+   * @param repo 目标仓储
+   * @param rows 待写入的行（保持原顺序）
+   * @param conflictPaths upsert 的冲突键
+   * @param fallbackColumns 取不到实体元数据时的保守列数（单测替身没有 metadata）
+   */
+  private async upsertInChunks<T extends ObjectLiteral>(
+    repo: Repository<T>,
+    rows: T[],
+    conflictPaths: string[],
+    fallbackColumns: number,
+  ): Promise<number> {
+    let written = 0;
+    for (const chunk of chunkRows(rows, paramsPerRowOf(repo.metadata, fallbackColumns))) {
+      const result = await repo.upsert(chunk, conflictPaths);
+      written += result.identifiers.length;
+    }
+    return written;
   }
 
   private today(): string {

@@ -4,6 +4,7 @@ import { describe, expect, it, vi } from 'vitest';
 import { SyncService } from './sync.service.js';
 import { DataGateway } from './data.gateway.js';
 import { SYNC_STATE, SYNC_TARGET } from './sync/sync.types.js';
+import { MAX_BIND_PARAMS } from './sync/write-chunk.js';
 import type { QueueService } from '@shared';
 
 /** 造一个 mock repository */
@@ -797,5 +798,47 @@ describe('SyncService', () => {
     const run = await (svc as unknown as { claimNext: () => Promise<unknown> }).claimNext();
 
     expect(run).toBeNull();
+  });
+
+  it('upsertBars 按参数预算分批（单条语句不能超过 PostgreSQL 的 65535 参数上限）', async () => {
+    const chunkSizes: number[] = [];
+    const barRepo = {
+      upsert: vi.fn(async (rows: unknown[]) => {
+        chunkSizes.push(rows.length);
+        return { identifiers: rows.map(() => ({})) };
+      }),
+    };
+    const { svc } = makeService();
+    (svc as unknown as { barRepo: unknown }).barRepo = barRepo;
+
+    // 现场规模：一天全市场 5000 行 × 18 列 = 90000 个参数。
+    // 旧实现拼成一条语句 ⇒ pg 的 addInt16 截断 ⇒ 「bind message has ... parameter formats」
+    const rows = Array.from({ length: 5000 }, (_, index) => ({
+      code: `sh.${index}`,
+      date: '2020-06-05',
+    }));
+    const written = await (
+      svc as unknown as { upsertBars: (r: unknown[]) => Promise<number> }
+    ).upsertBars(rows);
+
+    // 行数与写入量都不能因为分批而少
+    expect(written).toBe(5000);
+    expect(chunkSizes.reduce((sum, n) => sum + n, 0)).toBe(5000);
+    expect(chunkSizes.length).toBeGreaterThan(1);
+    for (const size of chunkSizes) {
+      expect(size * 18).toBeLessThanOrEqual(MAX_BIND_PARAMS);
+    }
+  });
+
+  it('upsertBars 行数在预算内时只发一条语句', async () => {
+    const upsert = vi.fn(async (rows: unknown[]) => ({ identifiers: rows.map(() => ({})) }));
+    const { svc } = makeService();
+    (svc as unknown as { barRepo: unknown }).barRepo = { upsert };
+
+    await (
+      svc as unknown as { upsertBars: (r: unknown[]) => Promise<number> }
+    ).upsertBars([{ code: 'sh.600000', date: '2020-06-04' }]);
+
+    expect(upsert).toHaveBeenCalledTimes(1);
   });
 });

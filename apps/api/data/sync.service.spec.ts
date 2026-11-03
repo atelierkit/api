@@ -135,13 +135,14 @@ describe('SyncService', () => {
     const runRepo = {
       count: vi.fn(async () => 0),
       find: vi.fn(async () => []),
-      // 执行中：没有结束时刻 ⇒ updatedAt 退回开始时刻
+      // 执行中：没有结束时刻 ⇒ updatedAt 取「进度最后一次写回的时刻」，而不是开始时刻
       findOne: vi.fn(async () => ({
         state: SYNC_STATE.RUNNING,
         stage: '同步全市场日线',
         done: '5',
         total: '10',
         startedAt: new Date('2026-01-05T01:00:00.000Z'),
+        progressAt: new Date('2026-01-05T01:07:30.000Z'),
         finishedAt: null,
       })),
     };
@@ -154,9 +155,66 @@ describe('SyncService', () => {
       stage: '同步全市场日线',
       done: 5,
       total: 10,
-      updatedAt: '2026-01-05T01:00:00.000Z',
+      updatedAt: '2026-01-05T01:07:30.000Z',
       state: SYNC_STATE.RUNNING,
     });
+  });
+
+  it('snapshot 的更新时刻优先级：结束时刻 > 进度打点 > 开始时刻', async () => {
+    const coverageRepo = { findOneBy: vi.fn(async () => null) };
+    const runOf = (row: Record<string, unknown>): Record<string, unknown> => ({
+      count: vi.fn(async () => 0),
+      find: vi.fn(async () => []),
+      findOne: vi.fn(async () => ({
+        state: SYNC_STATE.RUNNING,
+        stage: '',
+        done: '0',
+        total: '0',
+        startedAt: new Date('2026-01-05T01:00:00.000Z'),
+        progressAt: null,
+        finishedAt: null,
+        ...row,
+      })),
+    });
+
+    // 刚启动、还没上报过进度 ⇒ 退回开始时刻（否则卡片上是空白）
+    const started = await makeService({ coverageRepo, runRepo: runOf({}) }).svc.snapshot();
+    expect(started.cards[0].updatedAt).toBe('2026-01-05T01:00:00.000Z');
+
+    // 已收尾 ⇒ 结束时刻最准，不被进度打点盖住
+    const finished = await makeService({
+      coverageRepo,
+      runRepo: runOf({
+        state: SYNC_STATE.SUCCEEDED,
+        progressAt: new Date('2026-01-05T01:07:30.000Z'),
+        finishedAt: new Date('2026-01-05T01:09:00.000Z'),
+      }),
+    }).svc.snapshot();
+    expect(finished.cards[0].updatedAt).toBe('2026-01-05T01:09:00.000Z');
+  });
+
+  it('进度上报同时写「进度打点时刻」（卡片最后更新的唯一来源）', async () => {
+    const runRepo = { update: vi.fn(async () => ({ affected: 1 })) };
+    const { svc, gateway } = makeService({ runRepo });
+
+    const sink = (
+      svc as unknown as { makeProgress: (id: string) => { report: (p: unknown) => void } }
+    ).makeProgress('10');
+    sink.report({ stage: '同步全市场日线', done: 5, total: 10 });
+    // report 挂在串行 Promise 链上，等它落地再断言
+    await new Promise((resolve) => setTimeout(resolve, 0));
+
+    expect(runRepo.update).toHaveBeenCalledWith(
+      { id: '10', state: SYNC_STATE.RUNNING },
+      expect.objectContaining({
+        stage: '同步全市场日线',
+        done: '5',
+        total: '10',
+        // 由库端 now() 求值：执行中每批进度都会刷新这个时刻
+        progressAt: expect.any(Function),
+      }),
+    );
+    expect(gateway.broadcast).toHaveBeenCalledWith('progress');
   });
 
   it('pause 把 Running 的执行置为 Paused 并广播', async () => {

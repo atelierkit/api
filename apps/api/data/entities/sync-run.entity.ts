@@ -81,4 +81,14 @@ export class SyncRunEntity {
   /** 结束时间 */
   @Column({ type: 'timestamptz', name: 'finished_at', nullable: true })
   finishedAt!: Date | null;
+
+  /**
+   * 进度最后一次写回的时刻
+   *
+   * ⚠ 单独一列，不复用 `started_at`：执行中 `finished_at` 为空，若「最后更新」只取
+   * `finished_at ?? started_at`，页面上的时间会一直停在开始那一刻，而进度条却在动 ——
+   * 两者自相矛盾（实测用户就是这么发现问题的）。每批进度 UPDATE 时打一次点。
+   */
+  @Column({ type: 'timestamptz', name: 'progress_at', nullable: true })
+  progressAt!: Date | null;
 }

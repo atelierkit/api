@@ -111,6 +111,7 @@ describe('数据模型实体列名契约', () => {
         'created_at',
         'started_at',
         'finished_at',
+        'progress_at',
       ].sort(),
     );
   });

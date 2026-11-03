@@ -111,6 +111,7 @@ CREATE TABLE IF NOT EXISTS sync_runs (
     created_at   timestamptz NOT NULL DEFAULT now(),
     started_at   timestamptz NULL,
     finished_at  timestamptz NULL,
+    progress_at  timestamptz NULL,           -- 进度最后一次写回的时刻（卡片「最后更新」的数据来源）
     CONSTRAINT pk_sync_runs PRIMARY KEY (id),
     CONSTRAINT fk_sync_runs_task FOREIGN KEY (task_id) REFERENCES sync_tasks (id)
 );
@@ -132,3 +133,17 @@ CREATE UNIQUE INDEX IF NOT EXISTS "IDX_sync_runs_active"
 
 > 注意：`IDX_sync_runs_active` 的谓词里活跃状态集合 `IN (1, 2)` 需与代码里的 `SyncStates.active`
 > 保持一致。本方案状态值沿用 almanac：`1 Queued / 2 Running` 为活跃态。
+
+## 四、存量库升级（已有 `sync_runs` 表的库必须执行）
+
+```sql
+-- 2026-11-03：卡片「最后更新」要随进度实时变化。
+-- 执行中 finished_at 为空，只靠 `finished_at ?? started_at` 会永远停在开始时刻，
+-- 因此单独记一列进度打点时刻，由每批进度的 UPDATE 写入 now()。
+ALTER TABLE sync_runs ADD COLUMN IF NOT EXISTS progress_at timestamptz NULL;
+```
+
+> ⚠ 代码与库必须一起升级：实体里已声明 `progress_at`，若库上缺这一列，
+> SELECT 会直接报「列不存在」，整页快照失效（不是只丢一个字段）。
+> `NODE_ENV` 为 `dev` / `demo` 时 TypeORM `synchronize` 会自动补列，`prod` 必须手工执行上面这条。
+

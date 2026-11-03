@@ -297,7 +297,13 @@ export class SyncService implements OnApplicationBootstrap, OnModuleDestroy {
           .then(async () => {
             const result = await this.runRepo.update(
               { id: runId, state: SYNC_STATE.RUNNING },
-              { stage: p.stage, done: String(p.done), total: String(p.total) },
+              {
+                stage: p.stage,
+                done: String(p.done),
+                total: String(p.total),
+                // 「最后更新」的唯一数据来源：只有在这里打点，执行中的卡片时间才会随进度走
+                progressAt: () => 'now()',
+              },
             );
             if ((result.affected ?? 0) > 0) {
               this.gateway.broadcast('progress');
@@ -571,7 +577,8 @@ export class SyncService implements OnApplicationBootstrap, OnModuleDestroy {
       stage: latest?.stage ?? null,
       done: Number(latest?.done ?? 0),
       total: Number(latest?.total ?? 0),
-      updatedAt: toIso(latest?.finishedAt ?? latest?.startedAt ?? null),
+      // 优先级：结束时刻（终态才有）→ 进度打点（执行中每秒级）→ 开始时刻（刚启动、还没上报过进度）
+      updatedAt: toIso(latest?.finishedAt ?? latest?.progressAt ?? latest?.startedAt ?? null),
     };
   }
 
@@ -616,7 +623,12 @@ export interface CardSummary {
   done: number;
   /** 最近一次执行的总量（0 = 未知） */
   total: number;
-  /** 最近一次执行的开始/结束时刻（ISO 串，null = 从未执行） */
+  /**
+   * 最近一次执行的更新时刻（ISO 串，null = 从未执行）
+   *
+   * 执行中取「进度最后一次写回的时刻」（`progress_at`），终态取 `finished_at`；
+   * 前端把它显示成卡片上的「最后更新」，与进度条同一时刻，不会出现「进度在动、时间不动」。
+   */
   updatedAt: string | null;
 }
 

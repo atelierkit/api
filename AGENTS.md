@@ -93,6 +93,33 @@
   9. **`verify` 同时管「证书链」与「主机名」**：自签场景下即使把服务端证书当 CA 填进去，只要它没有
      `subjectAltName=IP:<地址>`，仍会报 `ERR_TLS_CERT_ALTNAME_INVALID`（2026-11-03 在工控机上实测）。家用环境要么关 `verify`
      （传输仍加密，只是不校验对端身份），要么重签服务端证书并带上 SAN —— 别指望「CA 填对了就能过」。
+- **`apps/api/cloud/kubernetes`**：**新建**的 Kubernetes 集群管理模块（2026-11-03），与 KONG / Docker 同一套
+  「站点 + 站点下资源」的组织方式：`kubernetes` / `kubernetes_logs` 存连接凭据，集群里的命名空间 / 节点 / Pod /
+  工作负载 / Service **不落库**。接口前缀 `cloud/kubernetes`（资源在 `cloud/kubernetes/object/`），全部 `@Allow('admin')`。
+  九条约定：
+  1. **Token 与客户端证书都支持，二者可并存**：`token` 与 `key` 两列都是 `enc:v1:` 密文（同一套 `SETTING_KEY`），
+     `index` / `show` / `log` 走 `view()` 把两者清空、另回 `hasToken` / `hasKey`。**必须至少有一种凭据**，
+     匿名连接只会让用户以为「集群是空的」（实际是 403 被吞成空列表），故服务层直接 422。
+  2. **切鉴权方式要能清掉旧的**：详情不下发凭据 ⇒「空串」只能表示「不修改」，所以 `KubernetesUpdateDto` 有
+     `clearToken` / `clearCert` 两个显式开关。这不是多余功能：API Server 的鉴权链是「先试 Bearer」，
+     一个失效的旧 Token 会直接 401，**不会**回退到客户端证书。
+  3. **不用 `fetch`，用 `node:http` / `node:https`**：自建集群几乎都是自签 CA，必须能按请求注入 `ca` / `cert` / `key`；
+     非 2xx 按 API Server 的状态码原样转 `HttpException`（403 权限不足 / 404 不存在 / 409 冲突都要透传）。
+  4. **路径自带组与版本，不要加前缀**：核心组 `/api/v1/...`、apps 组 `/apis/apps/v1/...`。这与 Docker 的
+     `/v1.47` 前缀是两套东西，别照搬。
+  5. **不做路径透传**：`object.types.ts` 的 `KUBERNETES_OBJECT_ACTIONS` 把「类型 × 动作」映射成固定方法与路径，
+     动作只有 `remove` / `scale` / `restart` / `cordon` / `uncordon`；DTO 只收 `replicas` / `gracePeriod` 两个平铺字段。
+     **扩缩容缺 `replicas` 直接 400** —— 默默按 0 处理等于把服务缩到零。
+  6. **命名空间两种语义**：列表允许空串（全部命名空间，走 `/api/v1/pods` 这种集群级路径）；
+     动作与详情必须落到具体命名空间，取「提交值 → 集群配置的 `namespace` → `default`」。
+  7. **`servicePortsOf` / `podStatusOf` 这类投影是纯函数且单独测**：Pod 的容器等待原因优先于阶段
+     （`CrashLoopBackOff` 不能被 `Running` 盖掉），`Completed` 不算异常；节点被 cordon 时状态显示
+     `SchedulingDisabled`（即使它 Ready），角色只从 `node-role.kubernetes.io/*` 标签取、没有就留空。
+  8. **概览用集群级列表**：`KubernetesService.summary` 并行取 `/version` + `/api/v1/{nodes,namespaces,pods}`
+     + `/apis/apps/v1/deployments` + `/api/v1/services`，任一失败按原状态码抛；因此 ServiceAccount 需要
+     cluster 级 list 权限，权限不足时给 403 由用户自行降级（不做「悄悄少几块」的兜底）。
+  9. **证书 PEM 校验复用 `docker/docker.cert.ts`**：它只依赖 `node:crypto`，与 Docker 协议无关；
+     新建 / 换证书时先校验「一张证书 + 可解析 + 与私钥配对」，别等握手时报 `key values mismatch`。
 - **`apps/api/tencent`**：自旧私有 `api` 项目 的 `src/tencent` 迁入的**腾讯云模块**（`TencentModule`），
   接口前缀 `tencent/`（`ssl` / `dns` / `domain` / `cdn` / `firewall` / `lighthouse`），全部 `@Allow('admin')`；
   依赖 `CloudModule` —— `KeyService` 取密钥、`KongService` + `ObjectService` 把 SSL 证书部署到 KONG 站点。约定：

@@ -5,7 +5,8 @@
 # 用途：拉镜像 → 以固定身份重建容器 → 校验是否真的跑起来。
 #
 # 用法：
-#   bash deploy/start-api.sh                 # 拉取 latest 并重建容器
+#   bash deploy/start-api.sh                 # 拉取 latest；镜像有更新才重建容器
+#   bash deploy/start-api.sh --force         # 镜像没变也重建（改了 env / 端口 / 挂载后用）
 #   bash deploy/start-api.sh sha-1a2b3c4     # 拉取指定标签（回滚 / 灰度用）
 #   TAG=v1.2.0 bash deploy/start-api.sh      # 同上，用环境变量传
 #
@@ -25,10 +26,12 @@
 #   UPLOAD_HOST_DIR 宿主机上传目录（默认 /data/atelierkit/uploads；置空则不挂卷）
 #   UPLOAD_DIR      容器内上传目录（默认 /data/uploads），必须与挂载右侧一致
 #
-# 三条设计取舍（都是踩过的坑）：
+# 四条设计取舍（都是踩过的坑）：
 #   1. 配置全部由 --env-file 注入，脚本里不出现任何口令。
 #   2. 先 pull 成功、再删旧容器：pull 失败时站点不受影响（旧写法会先 rm 再失败，站点直接下线）。
 #   3. 启动后校验容器是否仍活着，异常时打印最近日志，避免「回显成功但已退出」。
+#   4. 镜像 digest 没变时**默认不重建**：`docker rm -f` 会让服务断几秒，而内容其实一模一样；
+#      确实需要重建（改了 env / 端口 / 挂载）时用 --force。
 #
 # 依赖：docker
 
@@ -58,8 +61,18 @@ GHCR_PAT_FILE="${GHCR_PAT_FILE:-}"
 UPLOAD_HOST_DIR="${UPLOAD_HOST_DIR:-/data/atelierkit/uploads}"
 UPLOAD_DIR="${UPLOAD_DIR:-/data/uploads}"
 
-# 镜像标签：命令行参数 > 环境变量 TAG > latest
-TAG="${1:-${TAG:-latest}}"
+# 镜像标签：第一个非选项参数 > 环境变量 TAG > latest
+# 同时支持 -f / --force：镜像没变也重建容器
+TAG="${TAG:-latest}"
+FORCE="${FORCE:-0}"
+for arg in "$@"; do
+  case "$arg" in
+    -f | --force) FORCE=1 ;;
+    # 注：此处还不能用 die() —— 它在下面才定义
+    -*) printf '\033[31m✗\033[0m 未知选项：%s（可用：--force）\n' "$arg" >&2; exit 1 ;;
+    *) TAG="$arg" ;;
+  esac
+done
 IMAGE="${IMAGE_REPO}:${TAG}"
 
 # 必须出现在 env 文件里的键（缺失时应用会直接抛异常退出，先在这里拦一道）
@@ -123,8 +136,31 @@ pull_image() {
   docker pull "$image"
 }
 
+# 拉取前先记下本地镜像 ID（首次部署时为空），用于判断「远端是否真的更新了」
+old_image_id="$(docker image inspect --format '{{.Id}}' "$IMAGE" 2>/dev/null || true)"
+
 log "拉取镜像 $IMAGE"
 pull_image "$IMAGE" || die "拉取 $IMAGE 失败，旧容器保持运行（未做任何删除）"
+
+# 拉取后的镜像 ID
+new_image_id="$(docker image inspect --format '{{.Id}}' "$IMAGE")"
+
+# ---------- 镜像没变则跳过重建 ----------
+# `docker rm -f` 会让服务断几秒，镜像内容一模一样时这几秒是白丢的；
+# 但容器若已停止（崩溃 / 被手动 stop）就不能跳过，要往下走重建流程。
+if [[ "$old_image_id" == "$new_image_id" && "$FORCE" != 1 ]]; then
+  if [[ "$(docker inspect -f '{{.State.Running}}' "$CONTAINER" 2>/dev/null || echo false)" == 'true' ]]; then
+    log "镜像已是本地最新（${new_image_id:7:12}），容器 $CONTAINER 正在运行 —— 跳过重建"
+    log "需要强制重建（改过 env / 端口 / 挂载）时加 --force"
+    docker ps --filter "name=^${CONTAINER}$" --format '  {{.Names}}  {{.Image}}  {{.Status}}'
+    exit 0
+  fi
+  warn "镜像已是本地最新（${new_image_id:7:12}），但容器 $CONTAINER 未运行 —— 继续重建"
+fi
+
+if [[ -n "$old_image_id" && "$old_image_id" != "$new_image_id" ]]; then
+  log "镜像已更新：${old_image_id:7:12} → ${new_image_id:7:12}"
+fi
 
 # ---------- 重建容器 ----------
 # 固定 IP 决定只能「先删后建」，因此上面把 pull 放在删之前，pull 失败时站点不受影响

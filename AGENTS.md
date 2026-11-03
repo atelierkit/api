@@ -63,6 +63,36 @@
      `{"message":"Not found"}`。`KongService.summary()` 并行取 `/`（version / edition / hostname / node_id / lua_version / 插件数）与
      `/status`（连接数 / `database.reachable`），合并成 `KongSummary` 下发；无数据库模式（DB-less）时 `database` 段不存在，`dbReachable` 给 `null`（不适用），
      与 `false`（不可达）分开。`/plugins/enabled` 在 3.x 返回 **`{ enabled_plugins: [...] }`**（2.x 才是数组），`KongService.plugin()` 统一成 `string[]`。
+- **`apps/api/cloud/docker`**：**新建**的 Docker 宿主机管理模块（2026-11-03），与 KONG 站点同一套
+  「站点 + 站点下资源」的组织方式：`dockers` / `dockers_logs` 存连接配置，宿主机上的容器 / 镜像 / 数据卷 / 网络
+  **不落库**。接口前缀 `cloud/docker`（资源在 `cloud/docker/object/`），全部 `@Allow('admin')`。九条约定：
+  1. **不用 `fetch`，用 `node:http` / `node:https`**：`fetch`（undici）既不能给单次请求注入 `ca` / `cert` / `key`，
+     也不支持 unix socket；`docker.request.ts` 自己拼 `RequestOptions`，非 2xx 按 Docker 的状态码原样转
+     `HttpException` 透传（`304 Not Modified` 表示「已在目标状态」，按成功处理）。**这与 `kong.request.ts` 用 fetch 的差异是刻意的**，别按 KONG 改回去。
+  2. **端点只支持 `tcp://` / `http://` / `https://`，`unix://` 刻意不支持**：api 与 daemon 同机也应走 tcp + TLS，
+     不把宿主 socket 交给服务进程。端口省略时按「TLS 走 2376、明文走 2375」补默认值。
+  3. **不做路径透传**：Docker 的 `/containers/{id}/exec`、`/build`、`/swarm/init` 等价于宿主 root，
+     故 `object.types.ts` 的 `DOCKER_OBJECT_ACTIONS` 把「类型 × 动作」映射成固定方法与路径，`object.dto.ts` 只校验
+     类型白名单与动作白名单，`value` 也只有 `force` / `timeout` 两个平铺字段（**不要**改回 `Record<string, unknown>` 透传）。
+  4. **客户端私钥加密落库、永不下发**：`key` 列存 `enc:v1:` 密文（`encryptSecret` + `SETTING_KEY`，与邮件授权码同一套），
+     `index` / `show` / `log` 走 `view()` 把 `key` 清成空串、另回 `hasKey`；编辑时私钥留空或提交 `***` 都表示「不修改」，
+     只有**显式** `tls: false` 才连带清空证书三件套（否则改个说明就会把私钥抹掉）。
+  5. **明文连接必须显式确认**：`allowInsecure` 是 DTO 字段但**不落库**，服务层在「新建」或「提交了 endpoint / tls」时校验，
+     缺它直接 422 —— 只改说明不该被要求重新确认一次。
+  6. **列表做投影**：`/containers/json` 单个容器 30+ 字段，`ObjectService.index` 只下发展示需要的字段；
+     容器详情**不下发 Env**（常见把密码写在环境变量里）。⚠️ `GET /networks` **不返回** `Containers` 明细
+     （daemon 29.x 实测该字段整个缺失，只有 `GET /networks/{id}` 才有），网络页的容器数必须由
+     `/containers/json?all=1` 的 `NetworkSettings.Networks` 反推（`networkCountsOf`）；网络对象的 `Created`
+     是纳秒精度 RFC3339，直接下发原始字符串、由前端按毫秒解析。
+  7. **API 版本先探测再拼前缀**：不带 `/v1.x` 时 daemon 按最低兼容版本（1.24）应答、新字段缺失；`DockerService` 取
+     `GET /version` 的 `ApiVersion` 并按「协议 + 主机 + 端口 + 校验开关」缓存 5 分钟，配置了 `apiVersion` 则以配置为准。
+  8. **启用 TLS 时保存前就校验证书**（`docker.cert.ts`）：用 `X509Certificate` / `createPrivateKey` 归一成 SPKI 比公钥指纹，
+     并在「客户端证书框里有多张证书」时直接拒绝。这条是上线首日踩出来的 —— 把 `ca.pem` 拼在 `cert.pem` 前面一起粘进来，
+     Node 只取第一张，握手时报 `key values mismatch`，界面上完全看不出原因。另外 `httpsRequest()` 在证书/私钥不匹配时是
+     **构造阶段同步抛错**（还没进网络），`dockerRequest` 必须把它转成 422 可读文案，否则会冒成 500「服务器内部错误」。
+  9. **`verify` 同时管「证书链」与「主机名」**：自签场景下即使把服务端证书当 CA 填进去，只要它没有
+     `subjectAltName=IP:<地址>`，仍会报 `ERR_TLS_CERT_ALTNAME_INVALID`（2026-11-03 在工控机上实测）。家用环境要么关 `verify`
+     （传输仍加密，只是不校验对端身份），要么重签服务端证书并带上 SAN —— 别指望「CA 填对了就能过」。
 - **`apps/api/tencent`**：自旧私有 `api` 项目 的 `src/tencent` 迁入的**腾讯云模块**（`TencentModule`），
   接口前缀 `tencent/`（`ssl` / `dns` / `domain` / `cdn` / `firewall` / `lighthouse`），全部 `@Allow('admin')`；
   依赖 `CloudModule` —— `KeyService` 取密钥、`KongService` + `ObjectService` 把 SSL 证书部署到 KONG 站点。约定：

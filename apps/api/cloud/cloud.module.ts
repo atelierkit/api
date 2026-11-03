@@ -3,6 +3,11 @@ import { Module } from '@nestjs/common';
 import { TypeOrmModule } from '@nestjs/typeorm';
 // 内部依赖
 import { SharedModule } from '@shared';
+import { DockerController } from './docker/docker.controller.js';
+import { DockerEntity, DockerLogEntity } from './docker/docker.entity.js';
+import { DockerService } from './docker/docker.service.js';
+import { DockerObjectController } from './docker/object/object.controller.js';
+import { DockerObjectService } from './docker/object/object.service.js';
 import { KeyController } from './key/key.controller.js';
 import { KeyEntity, KeyLogEntity } from './key/key.entity.js';
 import { KeyService } from './key/key.service.js';
@@ -17,7 +22,8 @@ import { ObjectService } from './kong/object/object.service.js';
  *
  * 注：自旧私有 `api` 项目 的 `src/cloud`（密钥）与 `src/kong`（站点）合并迁入，
  * 两者在页面上同属「云服务」一个导航区，故收在同一个模块里；全部接口用 `@Allow('admin')` 声明
- * 所需角色，鉴权由全局 `TokenGuard` 完成。旧项目里按云厂商（tencent / aliyun）分的业务模块不迁移
+ * 所需角色，鉴权由全局 `TokenGuard` 完成。旧项目里按云厂商（tencent / aliyun）分的业务模块不迁移。
+ * 2026-11-03 新增 `docker`（宿主机管理），与 KONG 站点同一套「站点 + 站点下资源」的组织方式
  */
 @Module({
   imports: [
@@ -27,10 +33,18 @@ import { ObjectService } from './kong/object/object.service.js';
       KeyLogEntity,
       KongEntity,
       KongLogEntity,
+      DockerEntity,
+      DockerLogEntity,
     ]),
   ],
-  providers: [KeyService, KongService, ObjectService],
-  controllers: [KeyController, KongController, KongObjectController],
-  exports: [KeyService, KongService, ObjectService],
+  providers: [KeyService, KongService, ObjectService, DockerService, DockerObjectService],
+  controllers: [
+    KeyController,
+    KongController,
+    KongObjectController,
+    DockerController,
+    DockerObjectController,
+  ],
+  exports: [KeyService, KongService, ObjectService, DockerService, DockerObjectService],
 })
 export class CloudModule {}

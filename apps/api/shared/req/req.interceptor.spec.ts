@@ -21,6 +21,7 @@ import { ReqService } from './req.service.js';
  */
 function contextOf(req: unknown, res: unknown): ExecutionContext {
   return {
+    getType: () => 'http',
     switchToHttp: () => ({
       getRequest: () => req,
       getResponse: () => res,
@@ -143,6 +144,22 @@ describe('ReqInterceptor', () => {
 
     await firstValueFrom(interceptor.intercept(contextOf({}, res), next));
     expect(res.setHeader).not.toHaveBeenCalled();
+    expect(tasks).toHaveLength(0);
+  });
+
+  it('WS 消息处理器直接透传结果，不触碰请求/响应对象', async () => {
+    /** 被测拦截器与替身 */
+    const { interceptor, tasks } = serviceOf();
+    // 注：WS 上下文里没有 HTTP 请求/响应（getResponse 是消息载荷，无参数事件为 undefined），
+    // 只提供 getType —— 拦截器若仍按 HTTP 处理会直接抛 TypeError，ack 随之卡死
+    /** WS 执行上下文 */
+    const wsContext = { getType: () => 'ws' } as unknown as ExecutionContext;
+    /** 处理链 */
+    const next: CallHandler = { handle: () => of('ack') };
+
+    await expect(
+      firstValueFrom(interceptor.intercept(wsContext, next)),
+    ).resolves.toBe('ack');
     expect(tasks).toHaveLength(0);
   });
 });

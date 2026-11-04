@@ -67,6 +67,7 @@ function contextOf(req: unknown, res: unknown): ExecutionContext {
     return undefined;
   }
   return {
+    getType: () => 'http',
     switchToHttp: () => ({
       getRequest: () => req,
       getResponse: () => res,
@@ -167,6 +168,19 @@ describe('TokenGuard', () => {
         contextOf(requestOf('/passport/login'), responseOf()),
       ),
     ).toBe(true);
+    expect(tokenSrv.show).not.toHaveBeenCalled();
+  });
+
+  it('WS 消息处理器直接放行，不分配请求ID也不查令牌', async () => {
+    /** 被测守卫与替身 */
+    const { guard, redis, tokenSrv } = serviceOf();
+    // 注：WS 上下文里没有 HTTP 请求/响应（getRequest 是 socket、getResponse 是消息载荷），
+    // 只提供 getType —— 守卫若仍按 HTTP 处理会直接抛 TypeError
+    /** WS 执行上下文 */
+    const wsContext = { getType: () => 'ws' } as unknown as ExecutionContext;
+    await expect(guard.canActivate(wsContext)).resolves.toBe(true);
+    // 身份校验由网关的 socketIdentityOf 负责，这里既不该消耗请求ID，也不该查令牌
+    expect(redis.incr).not.toHaveBeenCalled();
     expect(tokenSrv.show).not.toHaveBeenCalled();
   });
 

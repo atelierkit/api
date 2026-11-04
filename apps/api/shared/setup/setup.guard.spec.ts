@@ -14,8 +14,27 @@ import { SetupService } from './setup.service.js';
  */
 function contextOf(method: string, path: string): ExecutionContext {
   return {
+    getType: () => 'http',
     switchToHttp: () => ({
       getRequest: () => ({ method, path }),
+    }),
+  } as unknown as ExecutionContext;
+}
+
+/**
+ * 构造 WS 执行上下文
+ *
+ * 注：Nest 的 ws 上下文里 `switchToHttp().getRequest()` 拿到的是 socket.io 的 Socket
+ * （没有 `path`），这里照原样复现 —— 用来锁住「守卫不得读取 HTTP 专用的字段」
+ *
+ * @returns 执行上下文
+ */
+function wsContextOf(): ExecutionContext {
+  return {
+    getType: () => 'ws',
+    switchToHttp: () => ({
+      getRequest: () => ({ id: 'socket-1', handshake: { auth: {} } }),
+      getResponse: () => undefined,
     }),
   } as unknown as ExecutionContext;
 }
@@ -82,6 +101,17 @@ describe('SetupGuard', () => {
     const guard = new SetupGuard(service);
     expect(await guard.canActivate(contextOf('GET', '/user/nav'))).toBe(true);
     // 正常业务请求不应为初始化状态多付一次缓存查询
+    expect(ready).not.toHaveBeenCalled();
+  });
+
+  it('WS 消息处理器直接放行，不读 HTTP 请求路径也不查初始化状态', async () => {
+    /** 初始化服务替身 */
+    const { service, ready } = serviceOf(false);
+    /** 守卫 */
+    const guard = new SetupGuard(service);
+    // 注：socket 没有 path，若守卫按 HTTP 处理会抛
+    // `Cannot read properties of undefined (reading 'startsWith')`
+    expect(await guard.canActivate(wsContextOf())).toBe(true);
     expect(ready).not.toHaveBeenCalled();
   });
 });

@@ -59,6 +59,17 @@ export class DbErrorFilter implements ExceptionFilter {
    * @param host 执行上下文
    */
   catch(exception: TypeORMError, host: ArgumentsHost): void {
+    // 注：全局过滤器同样会兜住 WS 消息处理器抛出的异常，但 WS 上下文里
+    // `switchToHttp().getResponse()` 是消息载荷（没有 `status` / `json`）⇒
+    // 按 HTTP 补发响应会抛 TypeError，把真正的数据库异常盖掉。
+    // WS 侧只留日志，响应交给网关自己的错误通道
+    if (host.getType() !== 'http') {
+      this.logger.error(
+        `WebSocket 数据库访问异常：${exception.message}`,
+        exception.stack,
+      );
+      return;
+    }
     /** 请求上下文 */
     const req = host.switchToHttp().getRequest<Request>();
     /** 响应上下文 */

@@ -46,6 +46,7 @@ function responseStub(params?: Record<string, unknown>) {
  */
 function hostOf(url: string, res: unknown): ArgumentsHost {
   return {
+    getType: () => 'http',
     switchToHttp: () => ({
       getRequest: () => ({ url }),
       getResponse: () => res,
@@ -142,5 +143,19 @@ describe('DbErrorFilter', () => {
     new DbErrorFilter().catch(errorOf(), hostOf('/x', res));
     expect(res.status).not.toHaveBeenCalled();
     expect(res.json).not.toHaveBeenCalled();
+  });
+
+  it('WS 上下文只记日志，不碰 HTTP 响应（消息载荷没有 status/json）', () => {
+    /** 日志桩 */
+    const log = vi
+      .spyOn(Logger.prototype, 'error')
+      .mockImplementation(() => undefined);
+    // 注：只提供 getType —— 过滤器若仍按 HTTP 补发响应会抛 TypeError，把真正的数据库异常盖掉
+    /** WS 执行上下文 */
+    const wsHost = { getType: () => 'ws' } as unknown as ArgumentsHost;
+
+    expect(() => new DbErrorFilter().catch(errorOf(), wsHost)).not.toThrow();
+    expect(log).toHaveBeenCalledTimes(1);
+    expect(String(log.mock.calls[0][0])).toContain('连接已被对端关闭');
   });
 });

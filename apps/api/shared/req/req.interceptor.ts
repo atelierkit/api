@@ -40,6 +40,12 @@ export class ReqInterceptor implements NestInterceptor {
    * @returns 响应报文可观察者
    */
   intercept(context: ExecutionContext, next: CallHandler) {
+    // 注：全局拦截器同样会包住 WS 消息处理器，但这里的逻辑全在 HTTP 上下文的
+    // `req` / `res` 上（WS 侧 `res` 其实是消息载荷，无载荷时为 undefined）⇒
+    // 直接透传，否则 `close` 这类无参数事件会在这里抛 TypeError 把 ack 卡死
+    if (context.getType() !== 'http') {
+      return next.handle();
+    }
     /**
      * 更新请求日志的用户ID，请求内容和响应内容
      * 1、异步处理，避免影响响应效率

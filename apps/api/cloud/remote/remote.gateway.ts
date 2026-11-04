@@ -97,7 +97,7 @@ export function clampSize(
 /**
  * 远程终端网关（socket.io 命名空间 `/remote`）
  *
- * 注 1：**不能靠全局 `TokenGuard`** —— 它只处理 HTTP 上下文（`switchToHttp()`），对 WS 完全不生效。
+ * 注 1：**不能靠全局 `TokenGuard`** —— 它按 HTTP 上下文写，对 `ws` 类型上下文直接放行。
  * 故这里自己校验三件事：握手令牌 → 用户存在且启用 → `admin` 角色；
  * 之后再用一次性票据换会话（票据由 `POST /cloud/remote/ticket` 签发）
  * 注 2：只做「换票建连 + 转发字节」，认证与凭据全在 `RemoteService` / `RemoteSshService` 里

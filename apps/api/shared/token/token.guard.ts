@@ -52,6 +52,13 @@ export class TokenGuard implements CanActivate {
    * @returns 守卫通过标记
    */
   async canActivate(context: ExecutionContext) {
+    // 注：全局守卫对 WS 消息处理器同样生效，但本守卫的每一件事（分配请求ID、请求日志、
+    // 客户端IP、响应头）都是 HTTP 专用的 —— WS 上下文里 `getRequest()` 是 socket、
+    // `getResponse()` 是消息载荷（无载荷时为 undefined），照原样执行必然抛 TypeError。
+    // WS 侧的身份校验由各网关的 `socketIdentityOf` 负责，这里直接放行
+    if (context.getType() !== 'http') {
+      return true;
+    }
     /** 请求时间 */
     const at = Date.now();
     /** 请求上下文 */

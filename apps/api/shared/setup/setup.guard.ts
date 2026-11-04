@@ -36,6 +36,13 @@ export class SetupGuard implements CanActivate {
    * @returns 守卫通过标记
    */
   async canActivate(context: ExecutionContext): Promise<boolean> {
+    // 注：`APP_GUARD` 注册的全局守卫同样会被挂到 WS 消息处理器上（上下文类型 `ws`），
+    // 而 WS 上下文里 `switchToHttp().getRequest()` 拿到的是 socket.io 的 Socket（没有 `path`），
+    // 继续往下读会抛 `Cannot read properties of undefined (reading 'startsWith')`。
+    // WS 的登录态由各网关在握手阶段自校验（`socketIdentityOf`），初始化判断只在 HTTP 侧有意义
+    if (context.getType() !== 'http') {
+      return true;
+    }
     /** 请求上下文 */
     const req: Request = context.switchToHttp().getRequest();
     /** 请求路径 */

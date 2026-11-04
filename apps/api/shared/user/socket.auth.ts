@@ -34,8 +34,8 @@ export type SocketAuthResult =
 /**
  * 校验 WebSocket 连接的登录状态与角色
  *
- * 注 1：**不能依赖全局 `TokenGuard`** —— 它只处理 HTTP 上下文（`switchToHttp()`），
- * 对 WS 完全不生效。故每个业务网关都要自己校验
+ * 注 1：**不能依赖全局 `TokenGuard`** —— 它按 HTTP 上下文写（`switchToHttp()` 在 WS 侧拿到的是
+ * socket 与消息载荷），故对 `ws` 类型上下文一律直接放行，鉴权必须由网关自己做
  * 注 2：令牌从 `socket.handshake.auth.token` 取（WS 不能自定义请求头），
  * 同时兜住 `headers.token`（少数客户端会塞在这里）
  * 注 3：校验通过时**顺手把身份写到 `socket.data`** —— 业务事件都靠它判断「这条连接属于谁」，

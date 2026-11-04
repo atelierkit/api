@@ -34,6 +34,12 @@ function controllerOf() {
     update: vi.fn(async (..._args: unknown[]) => 1),
     summary: vi.fn(async (_id: number) => ({ osName: 'Ubuntu' })),
     diagnose: vi.fn(async (_id: number) => ({ ok: true })),
+    inspectKey: vi.fn((_content: string, _passphrase: string) => ({
+      format: 'openssh',
+      converted: false,
+      encrypted: false,
+      fingerprint: 'SHA256:abc',
+    })),
     rememberFingerprint: vi.fn(async (..._args: unknown[]) => 1),
   };
   /** 会话服务替身 */
@@ -86,6 +92,17 @@ describe('RemoteController', () => {
       expiresAt: 1,
     });
     expect(sessionSrv.issue).toHaveBeenCalledWith(7, 3, { cols: 120, rows: 40 });
+  });
+
+  it('私钥预检转发给服务，口令缺省按空串（前端选完文件就调，不等到保存）', () => {
+    /** 被测控制器与替身 */
+    const { controller, remoteSrv } = controllerOf();
+    expect(controller.inspectKey({ content: 'KEY' })).toMatchObject({
+      format: 'openssh',
+    });
+    expect(remoteSrv.inspectKey).toHaveBeenCalledWith('KEY', '');
+    controller.inspectKey({ content: 'KEY', passphrase: 'p' });
+    expect(remoteSrv.inspectKey).toHaveBeenLastCalledWith('KEY', 'p');
   });
 
   it('信任新指纹走 rememberFingerprint（会进变更历史）', async () => {

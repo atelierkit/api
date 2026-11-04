@@ -4,11 +4,12 @@ import {
   NotFoundException,
   UnprocessableEntityException,
 } from '@nestjs/common';
+import { generateKeyPairSync } from 'node:crypto';
 import ssh2 from 'ssh2';
 import { Repository } from 'typeorm';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 // 内部依赖
-import { encryptSecret } from '../../shared/common/secret.util.js';
+import { decryptSecret, encryptSecret } from '../../shared/common/secret.util.js';
 import { OperateService } from '../../shared/operate/operate.service.js';
 import { QueueService } from '../../shared/queue/queue.service.js';
 import { fingerprintOf } from './remote.key.js';
@@ -38,6 +39,13 @@ const PASSWORD = 'p@ssw0rd';
 // 注：用 ssh2 自带的生成器，产出 `ssh-keygen` 的默认形态（OpenSSH）——
 // Node 的 `generateKeyPairSync` 只产 PKCS#8，而 PKCS#8 是 ssh2 解析不了的格式
 const PLAIN_KEY = ssh2.utils.generateKeyPairSync('ed25519').private;
+
+/** PKCS#8 的 RSA 私钥，注：从本地文件选进来的常见形态之一，落库前应被转成传统 PEM */
+const PKCS8_RSA_KEY = generateKeyPairSync('rsa', {
+  modulusLength: 2048,
+  privateKeyEncoding: { type: 'pkcs8', format: 'pem' },
+  publicKeyEncoding: { type: 'spki', format: 'pem' },
+}).privateKey;
 
 /** 主机记录（密码鉴权，凭据为密文） */
 const ROW = {
@@ -181,6 +189,40 @@ describe('RemoteService 查询', () => {
   });
 });
 
+describe('RemoteService 私钥预检', () => {
+  it('回格式 / 转换标记 / 加密标记 / 指纹，但不回私钥明文', () => {
+    /** 被测服务 */
+    const { service } = serviceOf();
+    /** 预检结果 */
+    const view = service.inspectKey(PLAIN_KEY);
+    expect(view).toMatchObject({
+      format: 'openssh',
+      converted: false,
+      encrypted: false,
+    });
+    expect(view.fingerprint).toMatch(/^SHA256:/);
+    // 注：凭据永不下发 —— 预览接口也不例外，浏览器本来就有原文，没必要从服务端绕一圈
+    expect(view).not.toHaveProperty('privateKey');
+  });
+
+  it('PKCS#8 标出「保存时会被转换」', () => {
+    /** 被测服务 */
+    const { service } = serviceOf();
+    expect(service.inspectKey(PKCS8_RSA_KEY)).toMatchObject({
+      format: 'pkcs8',
+      converted: true,
+    });
+  });
+
+  it('不合法内容抛 422（前端据此在选文件后立刻提示）', () => {
+    /** 被测服务 */
+    const { service } = serviceOf();
+    expect(() => service.inspectKey('not-a-key')).toThrow(
+      UnprocessableEntityException,
+    );
+  });
+});
+
 describe('RemoteService 创建', () => {
   it('密码鉴权：密码加密落库，私钥与口令清空，指纹从空起步', async () => {
     /** 被测服务与替身 */
@@ -208,6 +250,27 @@ describe('RemoteService 创建', () => {
     const entity = argOf(repository.insert) as Record<string, unknown>;
     expect(entity['privateKey']).toMatch(/^enc:v1:/);
     expect(entity['password']).toBe('');
+  });
+
+  it('PKCS#8 私钥落库前被转成传统 PEM（库里不留 ssh2 解析不了的格式）', async () => {
+    /** 被测服务与替身 */
+    const { service, repository } = serviceOf();
+    await service.create(
+      {
+        ...CREATE,
+        authType: 'key',
+        privateKey: PKCS8_RSA_KEY,
+        password: undefined,
+      },
+      7,
+      9,
+    );
+    /** 落库内容 */
+    const entity = argOf(repository.insert) as Record<string, unknown>;
+    /** 解密后的私钥 */
+    const stored = decryptSecret(String(entity['privateKey']), SETTING_KEY);
+    expect(stored.startsWith('-----BEGIN RSA PRIVATE KEY-----')).toBe(true);
+    expect(ssh2.utils.parseKey(stored)).not.toBeInstanceOf(Error);
   });
 
   it('私钥无法解析时保存即拒（不让用户等到连接时才看到 OpenSSL 原文）', async () => {

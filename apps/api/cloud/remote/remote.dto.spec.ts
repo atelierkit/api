@@ -5,6 +5,7 @@ import { describe, expect, it } from 'vitest';
 // 内部依赖
 import {
   RemoteCreateDto,
+  RemoteKeyInspectDto,
   RemoteTicketDto,
   RemoteTrustDto,
   RemoteUpdateDto,
@@ -157,6 +158,24 @@ describe('remote.dto', () => {
       ).toEqual(expect.arrayContaining(['cols', 'rows']));
       expect(
         await fieldsOf(RemoteTicketDto, { id: 1, cols: 120, rows: 40 }),
+      ).toEqual([]);
+    });
+  });
+
+  describe('RemoteKeyInspectDto', () => {
+    it('私钥内容必填，口令可空', async () => {
+      expect(await fieldsOf(RemoteKeyInspectDto, {})).toContain('content');
+      expect(await fieldsOf(RemoteKeyInspectDto, { content: PLAIN_KEY_TEXT })).toEqual(
+        [],
+      );
+    });
+
+    it('内容上限 16 KB（与 remote.key.ts 的 MAX_KEY_CHARS 同一数值）', async () => {
+      expect(
+        await fieldsOf(RemoteKeyInspectDto, { content: 'a'.repeat(16385) }),
+      ).toContain('content');
+      expect(
+        await fieldsOf(RemoteKeyInspectDto, { content: 'a'.repeat(16384) }),
       ).toEqual([]);
     });
   });

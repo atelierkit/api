@@ -173,6 +173,25 @@ export class RemoteUpdateDto {
   status?: boolean;
 }
 
+/** 私钥预检DTO，注：前端从本地文件读出内容后先过一遍，避免点保存才发现格式不对 */
+export class RemoteKeyInspectDto {
+  /**
+   * 私钥文件的文本内容
+   *
+   * 注：上限 16 KB 与 `remote.key.ts` 的 `MAX_KEY_CHARS` 保持一致 ——
+   * 2048 位 RSA 的 PEM 约 1.7 KB，超过这个量级的几乎都是选错了文件
+   */
+  @IsNotEmpty({ message: '私钥不能为空！' })
+  @MaxLength(16384, {
+    message: '私钥内容过大（超过 16 KB），请确认选择的是私钥文件本身！',
+  })
+  content!: string;
+
+  /** 私钥口令，注：可空（未加密的私钥） */
+  @IsOptional()
+  passphrase?: string;
+}
+
 /** 申请终端票据DTO */
 export class RemoteTicketDto {
   /** 主机ID */

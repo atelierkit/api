@@ -2,7 +2,7 @@
 import { Body, Controller, Get, Param, ParseIntPipe, Post } from '@nestjs/common';
 // 内部依赖
 import { Allow, CommonController, ReqId, UserId } from '@shared';
-import { RemoteCreateDto, RemoteTicketDto, RemoteTrustDto, RemoteUpdateDto } from './remote.dto.js';
+import { RemoteCreateDto, RemoteKeyInspectDto, RemoteTicketDto, RemoteTrustDto, RemoteUpdateDto } from './remote.dto.js';
 import { RemoteService } from './remote.service.js';
 import { RemoteSessionService } from './remote.session.js';
 
@@ -31,6 +31,20 @@ export class RemoteController extends CommonController<
     private readonly sessionSrv: RemoteSessionService,
   ) {
     super(remoteSrv);
+  }
+
+  /**
+   * 预检私钥文件内容
+   *
+   * 注：只回「识别结果」（格式 / 是否转换 / 是否加密 / 公钥指纹），**不回私钥明文**；
+   * 真正的格式转换在保存时做，与这里走同一个 `normalizePrivateKey`
+   *
+   * @param value 私钥预检入参（文件内容 + 口令）
+   * @returns 识别结果
+   */
+  @Post('key/inspect')
+  inspectKey(@Body() value: RemoteKeyInspectDto) {
+    return this.remoteSrv.inspectKey(value.content, value.passphrase ?? '');
   }
 
   /**

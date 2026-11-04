@@ -23,10 +23,8 @@ import {
 } from '@shared';
 import { RemoteCreateDto, RemoteUpdateDto } from './remote.dto.js';
 import { RemoteBaseEntity, RemoteEntity, RemoteLogEntity } from './remote.entity.js';
-import {
-  fingerprintOf,
-  privateKeyErrorOf,
-} from './remote.key.js';
+import { fingerprintOf, normalizePrivateKey } from './remote.key.js';
+import type { RemoteKeyInfo } from './remote.key.js';
 import {
   SUMMARY_COMMAND,
   UNAME_COMMAND,
@@ -89,6 +87,9 @@ type RemoteView<T extends RemoteBaseEntity> = T & {
   /** 是否已配置私钥口令 */
   hasPassphrase: boolean;
 };
+
+/** 私钥预检结果，注：刻意 `Omit` 掉 `privateKey` —— 凭据不下发浏览器 */
+export type RemoteKeyView = Omit<RemoteKeyInfo, 'privateKey'>;
 
 /** 连接所需的全部信息 */
 export interface RemoteTarget {
@@ -187,6 +188,33 @@ export class RemoteService extends CommonService<
   }
 
   /**
+   * 预检私钥文件内容
+   *
+   * 注 1：前端「选择本地私钥文件」后先调它，把「格式是否受支持、要不要口令、指纹是多少」
+   * 在保存前告诉用户，不必等到点保存才吃一个 422
+   * 注 2：**不回传私钥明文** —— 这份内容浏览器本来就有，但没有任何理由再从服务端绕一圈，
+   * 否则「凭据永不下发」这条边界就出现了例外；真正的转换发生在保存时（同一套函数，幂等）
+   *
+   * @param content 私钥原文（本地文件内容的文本）
+   * @param passphrase 私钥口令，空串表示无口令
+   * @returns 识别结果，注：不含私钥本身
+   * @throws UnprocessableEntityException 私钥形态不正确或口令不对时抛出
+   */
+  inspectKey(content: string, passphrase = ''): RemoteKeyView {
+    /** 规范化结果 */
+    const result = normalizePrivateKey(content, passphrase);
+    if (!result.ok) {
+      throw new UnprocessableEntityException(result.message);
+    }
+    return {
+      format: result.info.format,
+      converted: result.info.converted,
+      encrypted: result.info.encrypted,
+      fingerprint: result.info.fingerprint,
+    };
+  }
+
+  /**
    * 创建主机
    *
    * @param value 创建信息
@@ -202,17 +230,20 @@ export class RemoteService extends CommonService<
   ) {
     /** 是否私钥鉴权 */
     const byKey = value.authType === 'key';
+    /** 规范化后的私钥，注：PKCS#8 在这里被转成 PEM，落库的一律是 ssh2 能直接解析的形态 */
+    let privateKey = '';
     // 注：私钥在保存时就解析一遍 —— 连接阶段才发现「格式不对 / 口令错」，
     // 用户只会看到一句 OpenSSL 原文，根本不知道是哪个框填错了
     if (byKey) {
-      /** 私钥校验结果 */
-      const keyError = privateKeyErrorOf(
+      /** 私钥规范化结果 */
+      const keyResult = normalizePrivateKey(
         value.privateKey ?? '',
         value.passphrase ?? '',
       );
-      if (keyError !== null) {
-        throw new UnprocessableEntityException(keyError);
+      if (!keyResult.ok) {
+        throw new UnprocessableEntityException(keyResult.message);
       }
+      privateKey = keyResult.info.privateKey;
     }
     /** 落库内容，注：逐个挑字段，只留当前鉴权方式用到的那套凭据 */
     const entity: Partial<RemoteEntity> = {
@@ -223,7 +254,7 @@ export class RemoteService extends CommonService<
       authType: value.authType,
       username: value.username,
       password: byKey ? '' : this.encrypt(value.password ?? ''),
-      privateKey: byKey ? this.encrypt(value.privateKey ?? '') : '',
+      privateKey: byKey ? this.encrypt(privateKey) : '',
       passphrase: byKey ? this.encrypt(value.passphrase ?? '') : '',
       charset: value.charset ?? DEFAULT_CHARSET,
       // 注：指纹一律从空起步，首连时由 TOFU 记录，不允许新建时就手工填一个「假指纹」
@@ -318,17 +349,17 @@ export class RemoteService extends CommonService<
       patch.passphrase = this.encrypt(value.passphrase);
     }
     if (newKey) {
-      /** 私钥校验结果，注：口令要用「本次提交的」或「库里已有的解密值」 */
-      const keyError = privateKeyErrorOf(
+      /** 私钥规范化结果，注：口令要用「本次提交的」或「库里已有的解密值」 */
+      const keyResult = normalizePrivateKey(
         value.privateKey ?? '',
         value.passphrase !== undefined && value.passphrase !== REMOTE_SECRET_MASK
           ? (value.passphrase ?? '')
           : this.decrypt(current.passphrase),
       );
-      if (keyError !== null) {
-        throw new UnprocessableEntityException(keyError);
+      if (!keyResult.ok) {
+        throw new UnprocessableEntityException(keyResult.message);
       }
-      patch.privateKey = this.encrypt(value.privateKey ?? '');
+      patch.privateKey = this.encrypt(keyResult.info.privateKey);
     }
     // 注：切换后的凭据必须齐 —— DTO 的联动校验只管创建，更新时字段都是可选的
     if (authType === 'key') {

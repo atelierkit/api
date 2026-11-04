@@ -13,6 +13,7 @@ export * from './common/mask.util.js';
 export * from './common/retry-after.exception.js';
 export * from './user/password.util.js';
 export * from './user/user.constant.js';
+export * from './user/socket.auth.js';
 // 导出类型
 export * from './common/request.types.js';
 // 导出DTO

@@ -3,6 +3,7 @@ import { describe, expect, it, vi } from 'vitest';
 // 内部依赖
 import { DockerObjectController } from './object.controller.js';
 import { DockerObjectService } from './object.service.js';
+import { DockerLogsService } from './logs.service.js';
 
 /**
  * 组装被测控制器
@@ -16,11 +17,21 @@ function controllerOf() {
     show: vi.fn(async (..._args: unknown[]) => ({})),
     action: vi.fn(async (..._args: unknown[]) => undefined),
   };
+  /** 日志服务替身 */
+  const logsSrv = {
+    snapshot: vi.fn(async (..._args: unknown[]) => ({
+      lines: [],
+      tty: false,
+      truncated: false,
+    })),
+  };
   return {
     controller: new DockerObjectController(
       objectSrv as unknown as DockerObjectService,
+      logsSrv as unknown as DockerLogsService,
     ),
     objectSrv,
+    logsSrv,
   };
 }
 
@@ -53,6 +64,23 @@ describe('DockerObjectController', () => {
     expect(objectSrv.action).toHaveBeenCalledWith(2, 'containers', 'remove', 'abc', {
       force: true,
       timeout: undefined,
+    });
+  });
+
+  it('日志快照只转发三个查询参数（不接受任意 daemon 参数）', async () => {
+    /** 被测控制器与替身 */
+    const { controller, logsSrv } = controllerOf();
+    await controller.logs({
+      dockerId: 3,
+      id: 'abc',
+      tail: 200,
+      since: '2026-11-04T00:00:00Z',
+      timestamps: true,
+    });
+    expect(logsSrv.snapshot).toHaveBeenCalledWith(3, 'abc', {
+      tail: 200,
+      since: '2026-11-04T00:00:00Z',
+      timestamps: true,
     });
   });
 });

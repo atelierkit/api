@@ -9,6 +9,8 @@ import { DockerEntity, DockerLogEntity } from './docker/docker.entity.js';
 import { DockerService } from './docker/docker.service.js';
 import { DockerObjectController } from './docker/object/object.controller.js';
 import { DockerObjectService } from './docker/object/object.service.js';
+import { DockerLogGateway } from './docker/object/logs.gateway.js';
+import { DockerLogsService } from './docker/object/logs.service.js';
 import { KeyController } from './key/key.controller.js';
 import { KeyEntity, KeyLogEntity } from './key/key.entity.js';
 import { KeyService } from './key/key.service.js';
@@ -66,6 +68,8 @@ import type { SshClientLike } from './remote/remote.ssh.js';
     ObjectService,
     DockerService,
     DockerObjectService,
+    DockerLogsService,
+    DockerLogGateway,
     KubernetesService,
     KubernetesObjectService,
     RemoteService,

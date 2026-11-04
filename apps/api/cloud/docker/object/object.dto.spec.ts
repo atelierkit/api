@@ -4,6 +4,7 @@ import { validate } from 'class-validator';
 import { describe, expect, it } from 'vitest';
 // 内部依赖
 import {
+  DockerLogsDto,
   DockerObjectActionDto,
   DockerObjectIndexDto,
   DockerObjectShowDto,
@@ -137,6 +138,52 @@ describe('docker object.dto', () => {
           force: true,
         }),
       ).toEqual([]);
+    });
+  });
+
+  describe('DockerLogsDto', () => {
+    /** 合法的日志入参，注：**没有 type** —— 日志只对容器有意义 */
+    const LOG = { dockerId: 1, id: 'abc' };
+
+    it('只需要 dockerId 与 id（不需要 type，继承 show 会让前端漏传时直接 400）', async () => {
+      expect(await fieldsOf(DockerLogsDto, LOG)).toEqual([]);
+      expect(await fieldsOf(DockerLogsDto, { ...LOG, type: 'containers' })).toEqual(
+        [],
+      );
+    });
+
+    it('tail 允许 0，越界与非整数被拒', async () => {
+      expect(await fieldsOf(DockerLogsDto, { ...LOG, tail: 0 })).toEqual([]);
+      expect(await fieldsOf(DockerLogsDto, { ...LOG, tail: 5000 })).toEqual([]);
+      expect(await fieldsOf(DockerLogsDto, { ...LOG, tail: 5001 })).toContain('tail');
+      expect(await fieldsOf(DockerLogsDto, { ...LOG, tail: -1 })).toContain('tail');
+      expect(await fieldsOf(DockerLogsDto, { ...LOG, tail: 1.5 })).toContain('tail');
+    });
+
+    it('since 接受 RFC3339 与 Unix 秒，空串合法（未指定时前端会带空串）', async () => {
+      expect(
+        await fieldsOf(DockerLogsDto, { ...LOG, since: '2026-11-04T01:12:01.338Z' }),
+      ).toEqual([]);
+      expect(await fieldsOf(DockerLogsDto, { ...LOG, since: '1762214400' })).toEqual(
+        [],
+      );
+      expect(await fieldsOf(DockerLogsDto, { ...LOG, since: '' })).toEqual([]);
+    });
+
+    it('since 里带空格或分号被拒（它会被拼进查询串）', async () => {
+      expect(
+        await fieldsOf(DockerLogsDto, { ...LOG, since: '2026-11-04 01:12:01' }),
+      ).toContain('since');
+      expect(await fieldsOf(DockerLogsDto, { ...LOG, since: '1;DROP' })).toContain(
+        'since',
+      );
+    });
+
+    it('timestamps 必须是布尔', async () => {
+      expect(await fieldsOf(DockerLogsDto, { ...LOG, timestamps: false })).toEqual([]);
+      expect(await fieldsOf(DockerLogsDto, { ...LOG, timestamps: 'yes' })).toContain(
+        'timestamps',
+      );
     });
   });
 });

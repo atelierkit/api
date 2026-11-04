@@ -6,6 +6,8 @@ import { DockerController } from './docker/docker.controller.js';
 import { DockerService } from './docker/docker.service.js';
 import { DockerObjectController } from './docker/object/object.controller.js';
 import { DockerObjectService } from './docker/object/object.service.js';
+import { DockerLogGateway } from './docker/object/logs.gateway.js';
+import { DockerLogsService } from './docker/object/logs.service.js';
 import { KeyController } from './key/key.controller.js';
 import { KeyService } from './key/key.service.js';
 import { KongController } from './kong/kong.controller.js';
@@ -41,6 +43,8 @@ describe('CloudModule', () => {
         ObjectService,
         DockerService,
         DockerObjectService,
+        DockerLogsService,
+        DockerLogGateway,
         KubernetesService,
         KubernetesObjectService,
         RemoteService,
@@ -55,6 +59,9 @@ describe('CloudModule', () => {
     /** 提供者清单 */
     const providers = Reflect.getMetadata('providers', CloudModule) as unknown[];
     expect(providers).toContain(RemoteGateway);
+    // 注：日志网关同理 —— 漏登记时前端连 `/docker-log` 会静默超时，不是报错
+    expect(providers).toContain(DockerLogGateway);
+    expect(providers).toContain(DockerLogsService);
     expect(
       providers.some(
         (item) => (item as { provide?: unknown } | null)?.provide === SSH_CLIENT,

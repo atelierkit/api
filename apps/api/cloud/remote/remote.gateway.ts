@@ -9,7 +9,7 @@ import {
 } from '@nestjs/websockets';
 import type { Socket } from 'socket.io';
 // 内部依赖
-import { TokenService, UserService } from '@shared';
+import { TokenService, UserService, socketIdentityOf } from '@shared';
 import { RemoteSshService } from './remote.ssh.js';
 import { RemoteService } from './remote.service.js';
 import { RemoteSessionService } from './remote.session.js';
@@ -132,47 +132,23 @@ export class RemoteGateway implements OnGatewayDisconnect {
   /**
    * 建立连接时的鉴权
    *
-   * 注：鉴权失败立即断开 —— 不能让未鉴权的 socket 停留在命名空间里等 `open`
+   * 注 1：鉴权失败立即断开 —— 不能让未鉴权的 socket 停留在命名空间里等 `open`
+   * 注 2：校验规则抽在 `socketIdentityOf`（`@shared`），与 Docker 日志网关共用 ——
+   * 两处各写一份的话，以后改角色规则必然漏一处
    *
    * @param socket 连接
    */
   async handleConnection(socket: Socket): Promise<void> {
-    /** 握手载荷里的令牌，注：WS 不能自定义请求头，走 `auth` 载荷 */
-    const auth = socket.handshake.auth as { token?: unknown } | undefined;
-    /** 原始值，注：也可能有客户端把令牌塞在请求头里，一并兜住 */
-    const raw = auth?.token ?? socket.handshake.headers.token;
-    /** 令牌串 */
-    const token = typeof raw === 'string' ? raw.trim() : '';
-    if (token === '') {
-      this.reject(socket, 'TICKET_MISMATCH', '未携带登录令牌，请重新登录后再连接！');
-      return;
+    /** 校验结果 */
+    const result = await socketIdentityOf(socket, this.tokenSrv, this.userSrv);
+    if (!result.ok) {
+      // 注：终端场景给更明确的说法，其余文案与共享实现一致
+      this.reject(
+        socket,
+        'TICKET_MISMATCH',
+        result.reason === 'not-admin' ? '没有被授权访问终端！' : result.message,
+      );
     }
-    /** 令牌内容 */
-    const info = await this.tokenSrv.show(token);
-    /** 用户ID */
-    const userId = Number((info as { id?: unknown } | null)?.id) || 0;
-    if (userId === 0) {
-      this.reject(socket, 'TICKET_MISMATCH', '登录状态已失效，请重新登录！');
-      return;
-    }
-    /** 用户 */
-    const user = await this.userSrv.show(userId, 'status');
-    if (user === null || user === undefined) {
-      this.reject(socket, 'TICKET_MISMATCH', '用户不存在，请重新登录！');
-      return;
-    }
-    if (!user.status) {
-      this.reject(socket, 'TICKET_MISMATCH', '该用户已被禁用！');
-      return;
-    }
-    if (!(user.roles ?? []).includes('admin')) {
-      this.reject(socket, 'TICKET_MISMATCH', '没有被授权访问终端！');
-      return;
-    }
-    // 注：`data` 挂在 socket 上，后续事件据此判断「这条连接属于谁」，
-    // 票据消费时还会与票据里的 userId 再比一次
-    socket.data['userId'] = userId;
-    socket.data['username'] = user.username;
   }
 
   /**

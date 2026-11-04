@@ -1,13 +1,17 @@
 // 外部依赖
-import { createHash, createPrivateKey } from 'node:crypto';
+import { createHash } from 'node:crypto';
+import ssh2 from 'ssh2';
 
 /** 私钥 PEM 的起始标记，注：OpenSSH 与 PEM 两种格式都以此开头 */
 const PRIVATE_KEY_HEADER = /-----BEGIN [A-Z ]*PRIVATE KEY-----/;
 
+/** PKCS#8 私钥的起始标记，注：传统 PEM 是 `BEGIN RSA / EC / DSA PRIVATE KEY`，与它不冲突 */
+const PKCS8_HEADER = /-----BEGIN (?:ENCRYPTED )?PRIVATE KEY-----/;
+
 /**
  * 判断是否为 PuTTY 的私钥
  *
- * 注：ssh2 只认 OpenSSH 与 PEM，`.ppk` 会得到一句难以理解的解析错误，
+ * 注：ssh2 只认 PPK 的 v2，现代 PuTTY 默认导出 v3，解析会得到一句难以理解的错误，
  * 故在保存时就识别出来并给出转换命令
  *
  * @param pem 私钥文本
@@ -15,6 +19,19 @@ const PRIVATE_KEY_HEADER = /-----BEGIN [A-Z ]*PRIVATE KEY-----/;
  */
 export function isPuttyKey(pem: string): boolean {
   return /PuTTY-User-Key-File/i.test(pem ?? '');
+}
+
+/**
+ * 判断是否为 PKCS#8 私钥
+ *
+ * 注：`ssh2` 的解析器不认 PKCS#8（明文也一样报 `Unsupported key format`），
+ * 而 Java / 部分云厂商导出的私钥默认就是它，故单独识别并给转换命令
+ *
+ * @param pem 私钥文本
+ * @returns 是 PKCS#8 时为 true
+ */
+export function isPkcs8Key(pem: string): boolean {
+  return PKCS8_HEADER.test(pem ?? '');
 }
 
 /**
@@ -36,9 +53,13 @@ export function fingerprintOf(key: Buffer): string {
 /**
  * 校验私钥形态
  *
- * 注 1：在**保存时**就解析一遍，而不是等到连接时 —— 连接阶段的报错是 OpenSSL 原文
- * （`bad decrypt` / `DECODER routines::unsupported`），用户根本不知道是哪个框填错了
- * 注 2：`createPrivateKey` 对公钥、证书、乱码都会抛错，正好当作「是不是一张可用的私钥」的判据
+ * 注 1：解析交给 **ssh2 自己的解析器**（`ssh2.utils.parseKey`），与连接时用的是同一套代码 ——
+ * 校验口径与连接口径必须一致，否则会出现「保存通过、连接才发现解析不了」这种更难查的问题
+ * 注 2：**不要改用 `node:crypto` 的 `createPrivateKey`**：它不认 OpenSSH 格式
+ * （`-----BEGIN OPENSSH PRIVATE KEY-----`，即 `ssh-keygen` 默认产出、现实中绝大多数私钥），
+ * 对明文私钥也会抛 `DECODER routines::unsupported`，正好被当成「私钥已加密」——
+ * 2026-11-04 用户报的「私钥明明没设口令却提示已加密」就是这个错判
+ * 注 3：反过来，`createPrivateKey` 认 PKCS#8 而 ssh2 不认，故 PKCS#8 单独拦在解析之前
  *
  * @param pem 私钥文本
  * @param passphrase 私钥口令，无口令时传空串
@@ -53,32 +74,32 @@ export function privateKeyErrorOf(pem: string, passphrase = ''): string | null {
   if (isPuttyKey(text)) {
     return '不支持 PuTTY 的 .ppk 私钥，请先转换为 OpenSSH 格式：puttygen key.ppk -O private-openssh -o id_rsa！';
   }
+  if (isPkcs8Key(text)) {
+    return '不支持 PKCS#8 格式的私钥（-----BEGIN PRIVATE KEY-----），请先转换：ssh-keygen -p -f 私钥文件（按提示输入原口令，新口令留空即可）！';
+  }
   if (!PRIVATE_KEY_HEADER.test(text)) {
     return '私钥格式不正确：内容必须以 -----BEGIN ... PRIVATE KEY----- 开头（OpenSSH 或 PEM 格式）！';
   }
-  try {
-    createPrivateKey({
-      key: text,
-      passphrase: passphrase === '' ? undefined : passphrase,
-    });
-    return null;
-  } catch (err) {
-    /** 原始错误信息 */
-    const message = err instanceof Error ? err.message : String(err);
-    // 注：口令错与「格式不认识」必须分开报 —— 前者改一个字就能连上，后者要重新导出私钥
-    if (/bad decrypt|bad password|wrong final block|BAD_PASSWORDS/i.test(message)) {
-      return '私钥口令不正确！';
-    }
-    // 注：加密私钥但没给口令时，OpenSSL 报的是「需要口令」——
-    // Node 下具体是 `interrupted or cancelled`（它去要交互输入却被取消了），
-    // 不同版本措辞不一，故这里多认几种
-    if (
-      /passphrase|password|interrupted or cancelled|DECODER routines::unsupported/i.test(
-        message,
-      )
-    ) {
+  /** 解析结果，注：ssh2 不抛异常，失败时返回 Error */
+  const parsed = ssh2.utils.parseKey(
+    text,
+    passphrase === '' ? undefined : passphrase,
+  );
+  if (parsed instanceof Error) {
+    /** 原始错误信息，注：ssh2 只有一句英文，且不同格式措辞不同，故多认几种 */
+    const message = parsed.message;
+    if (/no passphrase given/i.test(message)) {
       return '该私钥已加密，请填写私钥口令！';
     }
-    return `私钥无法解析：${message}`;
+    if (/bad passphrase|integrity check failed/i.test(message)) {
+      return '私钥口令不正确！';
+    }
+    return `私钥无法解析：${message}（支持 OpenSSH 与 PEM 格式；PKCS#8 与 PuTTY 的 .ppk 请先转换）`;
   }
+  // 注：公钥内容（`ssh-ed25519 AAAA…`）走不到这里，它没有 PEM 头，上面就被拦住了；
+  // 这一句是防线，防止将来放开格式后被「公钥当私钥填」蒙过去
+  if (!parsed.isPrivateKey()) {
+    return '这不是私钥：内容是公钥或证书，请填写私钥文件（无 .pub 后缀）的内容！';
+  }
+  return null;
 }

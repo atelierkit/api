@@ -4,7 +4,7 @@ import {
   NotFoundException,
   UnprocessableEntityException,
 } from '@nestjs/common';
-import { generateKeyPairSync } from 'node:crypto';
+import ssh2 from 'ssh2';
 import { Repository } from 'typeorm';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 // 内部依赖
@@ -35,12 +35,9 @@ const SETTING_KEY = 'unit-test-setting-key';
 /** 明文凭据 */
 const PASSWORD = 'p@ssw0rd';
 
-/** 未加密的 RSA 私钥 */
-const PLAIN_KEY = generateKeyPairSync('rsa', {
-  modulusLength: 2048,
-  privateKeyEncoding: { type: 'pkcs8', format: 'pem' },
-  publicKeyEncoding: { type: 'spki', format: 'pem' },
-}).privateKey;
+// 注：用 ssh2 自带的生成器，产出 `ssh-keygen` 的默认形态（OpenSSH）——
+// Node 的 `generateKeyPairSync` 只产 PKCS#8，而 PKCS#8 是 ssh2 解析不了的格式
+const PLAIN_KEY = ssh2.utils.generateKeyPairSync('ed25519').private;
 
 /** 主机记录（密码鉴权，凭据为密文） */
 const ROW = {

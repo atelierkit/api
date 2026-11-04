@@ -9,7 +9,12 @@ import {
 } from '@nestjs/websockets';
 import type { Socket } from 'socket.io';
 // 内部依赖
-import { TokenService, UserService, socketIdentityOf } from '@shared';
+import {
+  SOCKET_GATEWAY_OPTION,
+  TokenService,
+  UserService,
+  socketIdentityOf,
+} from '@shared';
 import { RemoteSshService } from './remote.ssh.js';
 import { RemoteService } from './remote.service.js';
 import { RemoteSessionService } from './remote.session.js';
@@ -97,15 +102,10 @@ export function clampSize(
  * 之后再用一次性票据换会话（票据由 `POST /cloud/remote/ticket` 签发）
  * 注 2：只做「换票建连 + 转发字节」，认证与凭据全在 `RemoteService` / `RemoteSshService` 里
  * 注 3：`cors.origin: true` 是必须的 —— web 与 api 不同源，socket.io 默认不发 CORS 头，
- * 浏览器会在握手阶段静默失败
+ * 浏览器会在握手阶段静默失败。选项统一来自 `SOCKET_GATEWAY_OPTION`（含 2 MB 单帧上限，
+ * 粘贴大段文本需要），**不要在这里另写一套** —— 会与其它网关分叉，详见该常量的注释
  */
-@WebSocketGateway({
-  namespace: '/remote',
-  path: '/socket.io',
-  cors: { origin: true },
-  // 注：粘贴大段文本时单帧可能较大，2 MB 足够；上限本身也是防线，别调太大
-  maxHttpBufferSize: 2 * 1024 * 1024,
-})
+@WebSocketGateway({ ...SOCKET_GATEWAY_OPTION, namespace: '/remote' })
 export class RemoteGateway implements OnGatewayDisconnect {
   private readonly logger = new Logger(RemoteGateway.name);
 

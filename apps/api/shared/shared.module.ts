@@ -23,7 +23,6 @@ import { AvatarService } from './user/avatar.service.js';
 import { UserAvatarController } from './user/avatar.controller.js';
 import { UserController } from './user/user.controller.js';
 import { UserEntity, UserLogEntity } from './user/user.entity.js';
-import { UserGateway } from './user/user.gateway.js';
 import { UserService } from './user/user.service.js';
 
 @Module({
@@ -50,7 +49,6 @@ import { UserService } from './user/user.service.js';
     TokenService,
     RoleService,
     SetupService,
-    UserGateway,
     AvatarService,
     DbMonitorService,
   ],

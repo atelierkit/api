@@ -46,8 +46,8 @@ export * from './user/user.service.js';
 export * from './user/avatar.service.js';
 export * from './token/token.service.js';
 export * from './setup/setup.service.js';
-// 导出网关
-export * from './user/user.gateway.js';
+// 导出网关公共选项
+export * from './socket/socket.constant.js';
 // 导出管道
 export * from './operate/operate.pipe.js';
 // 导出路由守卫

@@ -9,7 +9,12 @@ import {
 } from '@nestjs/websockets';
 import type { Socket } from 'socket.io';
 // 内部依赖
-import { TokenService, UserService, socketIdentityOf } from '@shared';
+import {
+  SOCKET_GATEWAY_OPTION,
+  TokenService,
+  UserService,
+  socketIdentityOf,
+} from '@shared';
 import { ID_PATTERN } from './object.dto.js';
 import {
   DockerLogRing,
@@ -92,12 +97,10 @@ interface LogSession {
  * 并告知前端（用户要看的是最新输出，暂停 TCP 只会让延迟越滚越大）
  * 注 3：`handleDisconnect` 必须 `abort()` 宿主机请求 —— 只从 Map 删引用不会断 TCP，
  * daemon 侧会一直挂着一个日志跟随者
+ * 注 4：选项统一来自 `SOCKET_GATEWAY_OPTION`（`@shared`），**不要在这里另写一套** ——
+ * 详见该常量的注释（`path` 分叉会让进程直接崩）
  */
-@WebSocketGateway({
-  namespace: '/docker-log',
-  path: '/socket.io',
-  cors: { origin: true },
-})
+@WebSocketGateway({ ...SOCKET_GATEWAY_OPTION, namespace: '/docker-log' })
 export class DockerLogGateway implements OnGatewayDisconnect {
   private readonly logger = new Logger(DockerLogGateway.name);
 

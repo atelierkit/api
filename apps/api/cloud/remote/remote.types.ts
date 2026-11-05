@@ -65,6 +65,24 @@ export class RemoteError extends Error {
   }
 }
 
+/** 磁盘挂载点 */
+export interface RemoteDiskMount {
+  /** 设备名，如 `/dev/sda2` / `home-server:/data` */
+  filesystem: string;
+  /** 挂载点，如 `/` / `/data` */
+  mountPoint: string;
+  /** 文件系统类型，如 `ext4` / `xfs` / `nfs4`，取不到时为空串 */
+  type: string;
+  /** 总量（字节） */
+  total: number;
+  /** 已用（字节） */
+  used: number;
+  /** 剩余可用（字节） */
+  available: number;
+  /** 使用率（百分比整数） */
+  percent: number;
+}
+
 /** 主机概览 */
 export interface RemoteSummary {
   /** 发行版名称，如 `Ubuntu 22.04.4 LTS` */
@@ -87,12 +105,11 @@ export interface RemoteSummary {
   memoryTotal: number;
   /** 可用内存（字节） */
   memoryAvailable: number;
-  /** 根分区总量（字节） */
-  diskTotal: number;
-  /** 根分区已用（字节） */
-  diskUsed: number;
-  /** 根分区使用率（百分比整数） */
-  diskPercent: number;
+  /**
+   * 全部挂载点，注：按「`/` 优先、其余按挂载点升序」排序；
+   * 已剔除 tmpfs / squashfs / overlay 等伪文件系统的行（`/` 例外，总是保留）
+   */
+  disks: RemoteDiskMount[];
   /** 当前登录用户 */
   user: string;
 }

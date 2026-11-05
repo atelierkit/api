@@ -38,7 +38,9 @@ async function listeningPort(): Promise<number> {
     server.listen(0, '127.0.0.1', () => {
       /** 端口信息 */
       const address = server.address();
-      resolve(typeof address === 'object' && address !== null ? address.port : 0);
+      resolve(
+        typeof address === 'object' && address !== null ? address.port : 0,
+      );
     });
   });
 }
@@ -48,9 +50,9 @@ describe('SUMMARY_COMMAND', () => {
     for (const marker of Object.values(SUMMARY_MARKERS)) {
       expect(SUMMARY_COMMAND).toContain(marker);
     }
-    expect(SUMMARY_COMMAND.trimEnd().endsWith(`echo '${SUMMARY_MARKERS.end}'`)).toBe(
-      true,
-    );
+    expect(
+      SUMMARY_COMMAND.trimEnd().endsWith(`echo '${SUMMARY_MARKERS.end}'`),
+    ).toBe(true);
   });
 
   it('who 段在 end 之前，end 只出现一次', () => {
@@ -58,6 +60,12 @@ describe('SUMMARY_COMMAND', () => {
       SUMMARY_COMMAND.indexOf(SUMMARY_MARKERS.who),
     );
     expect(SUMMARY_COMMAND.split(SUMMARY_MARKERS.end).length - 1).toBe(1);
+  });
+
+  it('磁盘段取全部挂载点（不能带路径，带路径只会剩根分区一行）', () => {
+    expect(SUMMARY_COMMAND).toContain('df -kP 2>/dev/null');
+    expect(SUMMARY_COMMAND).not.toContain('df -kP /');
+    expect(SUMMARY_COMMAND).toContain('cat /proc/mounts');
   });
 });
 
@@ -98,9 +106,13 @@ describe('sectionsOf', () => {
   it('首个标记之前的内容（登录 banner）被丢弃', () => {
     /** 分段结果 */
     const sections = sectionsOf(
-      ['Welcome to Ubuntu', '@@OS@@', 'PRETTY_NAME="Ubuntu 22.04"', '@@WHO@@', 'root'].join(
-        '\n',
-      ),
+      [
+        'Welcome to Ubuntu',
+        '@@OS@@',
+        'PRETTY_NAME="Ubuntu 22.04"',
+        '@@WHO@@',
+        'root',
+      ].join('\n'),
     );
     expect(sections.get('os')).toEqual(['PRETTY_NAME="Ubuntu 22.04"']);
     expect(sections.get('who')).toEqual(['root']);
@@ -134,7 +146,16 @@ describe('parseLinuxSummary', () => {
     'MemFree:          123456 kB',
     'MemAvailable:    6543210 kB',
     '@@DISK@@',
-    '/dev/sda2    1024000  512000  460000  53% /',
+    'Filesystem     1024-blocks      Used Available Capacity Mounted on',
+    '/dev/sda2         1024000    512000    460000      53% /',
+    '/dev/sdb1        20480000   4096000  15360000      21% /data',
+    'tmpfs              409600         0    409600       0% /run',
+    '/dev/loop0         128000    128000         0     100% /snap/core20/1974',
+    '@@FSTYPE@@',
+    '/dev/sda2 / ext4 rw,relatime 0 0',
+    '/dev/sdb1 /data xfs rw,relatime 0 0',
+    'tmpfs /run tmpfs rw,nosuid,nodev 0 0',
+    '/dev/loop0 /snap/core20/1974 squashfs ro,nodev 0 0',
     '@@WHO@@',
     'marbl',
     '@@END@@',
@@ -152,16 +173,86 @@ describe('parseLinuxSummary', () => {
       load15: 0.25,
       memoryTotal: 8123456 * 1024,
       memoryAvailable: 6543210 * 1024,
-      diskTotal: 1024000 * 1024,
-      diskUsed: 512000 * 1024,
-      diskPercent: 53,
+      disks: [
+        {
+          filesystem: '/dev/sda2',
+          mountPoint: '/',
+          type: 'ext4',
+          total: 1024000 * 1024,
+          used: 512000 * 1024,
+          available: 460000 * 1024,
+          percent: 53,
+        },
+        {
+          filesystem: '/dev/sdb1',
+          mountPoint: '/data',
+          type: 'xfs',
+          total: 20480000 * 1024,
+          used: 4096000 * 1024,
+          available: 15360000 * 1024,
+          percent: 21,
+        },
+      ],
       user: 'marbl',
     });
   });
 
+  it('列出全部真实挂载点，tmpfs / squashfs 等伪文件系统被剔除', () => {
+    /** 结果 */
+    const result = parseLinuxSummary(RAW);
+    expect(result.disks.map((item) => item.mountPoint)).toEqual(['/', '/data']);
+  });
+
+  it('根挂载点即使是 overlay 也保留（容器里 `/` 就是 overlay，滤掉会让卡片空白）', () => {
+    /** 输出，注：容器内 `df` 的典型形态 */
+    const raw = [
+      '@@DISK@@',
+      'overlay 1024000 512000 460000 53% /',
+      '@@FSTYPE@@',
+      'overlay / overlay rw,lowerdir=/var/lib/docker/overlay2/l/xxx 0 0',
+      '@@END@@',
+    ].join('\n');
+    /** 结果 */
+    const result = parseLinuxSummary(raw);
+    expect(result.disks).toHaveLength(1);
+    expect(result.disks[0]?.mountPoint).toBe('/');
+    expect(result.disks[0]?.type).toBe('overlay');
+  });
+
+  it('读不到 /proc/mounts 时不按类型剔除（宁可多显示几行也不漏掉真实数据盘）', () => {
+    /** 输出 */
+    const raw = ['@@DISK@@', 'tmpfs 409600 0 409600 0% /run', '@@END@@'].join(
+      '\n',
+    );
+    expect(parseLinuxSummary(raw).disks.map((item) => item.mountPoint)).toEqual(
+      ['/run'],
+    );
+  });
+
+  it('挂载点含空格时仍能切对，并与 /proc/mounts 的 \\040 转义对上类型', () => {
+    /** 输出 */
+    const raw = [
+      '@@DISK@@',
+      'Filesystem 1024-blocks Used Available Capacity Mounted on',
+      '/dev/sdc1 102400 51200 51200 50% /mnt/my disk',
+      '@@FSTYPE@@',
+      '/dev/sdc1 /mnt/my\\040disk ext4 rw,relatime 0 0',
+      '@@END@@',
+    ].join('\n');
+    /** 第一个挂载点，注：`df` 的表头不是数据行，必须被丢掉 */
+    const first = parseLinuxSummary(raw).disks[0];
+    expect(first?.mountPoint).toBe('/mnt/my disk');
+    expect(first?.type).toBe('ext4');
+  });
+
   it('老内核没有 MemAvailable 时退回 MemFree', () => {
     /** 输出 */
-    const raw = ['@@MEM@@', 'MemTotal: 1000 kB', 'MemFree: 400 kB', '@@END@@'].join('\n');
+    const raw = [
+      '@@MEM@@',
+      'MemTotal: 1000 kB',
+      'MemFree: 400 kB',
+      '@@END@@',
+    ].join('\n');
     expect(parseLinuxSummary(raw).memoryAvailable).toBe(400 * 1024);
   });
 
@@ -171,7 +262,7 @@ describe('parseLinuxSummary', () => {
     expect(result.osName).toBe('');
     expect(result.kernel).toBe('');
     expect(result.cpus).toBe(0);
-    expect(result.diskPercent).toBe(0);
+    expect(result.disks).toEqual([]);
   });
 
   it('非数字字段按 0 处理（脏输出不该让整页 500）', () => {

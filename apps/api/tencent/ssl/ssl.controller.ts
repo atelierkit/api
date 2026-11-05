@@ -3,7 +3,6 @@ import {
   BadRequestException,
   Body,
   Controller,
-  Logger,
   NotFoundException,
   Param,
   ParseIntPipe,
@@ -27,9 +26,6 @@ import {
 @Controller('tencent/ssl')
 @Allow('admin')
 export class SslController {
-  /** 日志记录器 */
-  private readonly logger = new Logger(SslController.name);
-
   /**
    * 构造函数
    *
@@ -177,9 +173,6 @@ export class SslController {
         targetId,
         certData,
       );
-      this.logger.debug(
-        `证书 ${body.CertificateId} 已更新到站点 ${body.KongId} 的 ${targetId}`,
-      );
       return { message: '证书更新成功', updated: true, certId: targetId };
     }
 
@@ -192,9 +185,6 @@ export class SslController {
     );
     /** 新证书ID */
     const certId = String(created['id'] ?? '');
-    this.logger.debug(
-      `证书 ${body.CertificateId} 已部署到站点 ${body.KongId} 的 ${certId}`,
-    );
     return { message: '证书部署成功', created: true, certId };
   }
 }

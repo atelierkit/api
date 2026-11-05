@@ -41,8 +41,8 @@ interface PoolLike {
  *
  * 连接层故障在默认配置下不会留下任何日志：TypeORM 自带的连接池错误回调以 warn 级别输出，
  * 而本项目 logging 仅开启 error，会被日志级别过滤掉。本服务直接挂载连接池事件，
- * 补齐「连接建立」「连接异常」「异常后连接移除」三类日志，并额外做定时探活，
- * 以便故障复现时判断断开的时间点、影响范围以及是否已自愈。
+ * 只记录「连接异常」「异常后重连」与「探活自愈」三类**异常链路**日志（连接建立/移除属正常现象，不再输出），
+ * 并额外做定时探活，以便故障复现时判断断开的时间点、影响范围以及是否已自愈。
  */
 @Injectable()
 export class DbMonitorService implements OnModuleInit, OnModuleDestroy {
@@ -51,8 +51,6 @@ export class DbMonitorService implements OnModuleInit, OnModuleDestroy {
   private pool?: PoolLike;
   /** 连接池异常时间点，用于抖动统计 */
   private readonly errorAts: number[] = [];
-  /** 最近一次连接池异常时间 */
-  private lastErrorAt = 0;
   /** 最近一次突发告警时间，用于告警节流 */
   private lastBurstAt = 0;
   /** 是否需要记录重连日志 */
@@ -87,8 +85,6 @@ export class DbMonitorService implements OnModuleInit, OnModuleDestroy {
       }
       pool.on('error', (error) => this.onPoolError(error));
       pool.on('connect', (client) => this.onConnect(client));
-      pool.on('remove', (client) => this.onRemove(client));
-      this.logger.log('数据库连接池监控已启用');
       this.startHeartbeat();
     } catch (error) {
       this.logger.error('数据库连接池监控启用失败：', error);
@@ -114,7 +110,6 @@ export class DbMonitorService implements OnModuleInit, OnModuleDestroy {
   private onPoolError(error: Error): void {
     /** 异常时间 */
     const at = Date.now();
-    this.lastErrorAt = at;
     this.errorAts.push(at);
     // 只保留统计窗口内的异常时间点
     while (this.errorAts.length && this.errorAts[0] < at - ERROR_WINDOW) {
@@ -142,36 +137,17 @@ export class DbMonitorService implements OnModuleInit, OnModuleDestroy {
   /**
    * 连接建立处理
    *
+   * 注：正常建连属常规事件，不再输出（默认只留异常与告警）；只有「异常后重新建连」值得留痕
+   *
    * @param client 新建立的连接
    */
   private onConnect(client: PoolClientLike): void {
-    if (this.needRecoverLog) {
-      this.needRecoverLog = false;
-      this.logger.warn(
-        `数据库连接异常后已重新建立连接：后端PID=${client?.processID ?? '-'}；` +
-          `连接池${this.describePool()}`,
-      );
+    if (!this.needRecoverLog) {
       return;
     }
-    this.logger.debug(
-      `数据库连接已建立：后端PID=${client?.processID ?? '-'}；` +
-        `连接池${this.describePool()}`,
-    );
-  }
-
-  /**
-   * 连接移除处理
-   *
-   * 注：空闲回收属于正常现象，仅在连接池刚发生异常时记录，避免日志噪音
-   *
-   * @param client 被移除的连接
-   */
-  private onRemove(client: PoolClientLike): void {
-    if (Date.now() - this.lastErrorAt > BURST_WINDOW) {
-      return;
-    }
-    this.logger.debug(
-      `数据库连接已移除：后端PID=${client?.processID ?? '-'}；` +
+    this.needRecoverLog = false;
+    this.logger.warn(
+      `数据库连接异常后已重新建立连接：后端PID=${client?.processID ?? '-'}；` +
         `连接池${this.describePool()}`,
     );
   }
@@ -195,7 +171,9 @@ export class DbMonitorService implements OnModuleInit, OnModuleDestroy {
     try {
       await this.dataSource.query('SELECT 1');
       if (this.failTimes) {
-        this.logger.log(
+        // 恢复是异常链路的收尾：用 warn 而非 info，否则默认级别下只留下「探活失败」，
+        // 会把已经自愈的故障误判成持续故障
+        this.logger.warn(
           `数据库探活已恢复正常，此前连续失败 ${this.failTimes} 次`,
         );
         this.failTimes = 0;

@@ -267,6 +267,21 @@
   （典型触发：给 `apps/worker` 加一条 `@shared` 导入去「试一下」，会连带把 `apps/api/shared` 整棵树的三种产物吐回源码目录）。
   这些是构建垃圾，`git status` 核对后直接删；提交前务必扫一眼（本项目 `declaration: true` + `composite: true`，产物正常只落在 `dist/apps/<project>/`）。
 
+## 日志口径（只输出异常与告警）
+
+- 两个入口的日志级别都由 `apps/api/log.options.ts` 的 `resolveLogLevels()` 决定：默认 `['error', 'warn']`，
+  环境变量 `LOG_LEVEL`（逗号分隔，或 `all`）可临时放开。**不要在入口硬编码级别数组**
+  （例外：`apps/worker` 不能 `@shared`，只能写字面量 `['error', 'warn']`，改口径时两处一起对）。
+- ⚠️ **请求路径上不许打 debug**：改造前 `TokenGuard` / `ReqInterceptor` 每来一个请求就刷 10 行
+  `DEBUG clientIp / url / reqId`（`Logger.debug('a', b)` 是**每个参数一行**），容器日志里真正的故障会被淹掉。
+  排障需要这些值时临时在本地加断点或 `LOG_LEVEL`，别提交回仓库。
+- **正常事件不输出**：连接建立 / 空闲回收 / 启动成功 / 缓存初始化 这类「预期内」的事件一律不打日志；
+  值得留痕的只有异常链路 —— 异常、异常后重连、探活自愈。
+- **恢复类日志用 `warn` 而不是 `log`**：默认级别下 `log` 不输出，只留「探活失败」而没有「已恢复正常」，
+  会把已自愈的故障误判成持续故障（`DbMonitorService` 的探活恢复即按此口径）。
+- `logger.log` 仍保留在状态变更处（自动建角色、系统初始化完成、同步入队等），默认级别下不输出，
+  排查时 `LOG_LEVEL=log` 恢复；真正需要「一直被看到」的异常请用 `error` / `warn`。
+
 ## 提交门禁（pre-commit）
 
 - `yarn install` 通过 `prepare: husky` 装好钩子，定义在 `.husky/pre-commit`：顺序执行 `yarn lint` → `yarn test`，任一失败即拒绝提交。

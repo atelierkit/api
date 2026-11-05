@@ -3,7 +3,6 @@ import {
   CallHandler,
   ExecutionContext,
   Injectable,
-  Logger,
   NestInterceptor,
 } from '@nestjs/common';
 import { Response, Request } from 'express';
@@ -20,7 +19,6 @@ import { ReqService } from './req.service.js';
  */
 @Injectable()
 export class ReqInterceptor implements NestInterceptor {
-  private readonly logger = new Logger(ReqInterceptor.name);
   /**
    * 构造函数
    *
@@ -58,7 +56,6 @@ export class ReqInterceptor implements NestInterceptor {
     const req: Request = context.switchToHttp().getRequest();
     /** 响应上下文 */
     const res: Response = context.switchToHttp().getResponse();
-    this.logger.debug('reqId', req['reqId']);
     if (req['reqId']) {
       res.setHeader('request_id', Number(req['reqId']));
     }

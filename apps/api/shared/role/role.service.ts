@@ -69,7 +69,6 @@ export class RoleService
       const exist = await this.roleRepository.existsBy({ id: ADMIN_ROLE.id });
       // 角色已存在，无需处理
       if (exist) {
-        this.logger.debug(`默认管理员角色${ADMIN_ROLE.id}已存在，无需创建`);
         return;
       }
       await this.create({ ...ADMIN_ROLE }, 0, 0);

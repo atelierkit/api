@@ -169,7 +169,6 @@ export class EmailService {
       transporter,
       config,
     };
-    this.logger.debug(`邮件连接器已建立：${config.host}:${config.port}`);
     return this.cache;
   }
 
@@ -191,7 +190,6 @@ export class EmailService {
     };
     try {
       await transporter.sendMail(payload);
-      this.logger.debug('邮件发送成功');
     } catch (err) {
       this.logger.warn(`邮件发送失败：${errorText(err)}`);
       throw new InternalServerErrorException(

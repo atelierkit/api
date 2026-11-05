@@ -5,11 +5,16 @@ import type { NestExpressApplication } from '@nestjs/platform-express';
 import { STATIC_URL_PREFIX } from '@shared/storage/storage.constant.js';
 import { storageRoot } from '@shared/storage/storage.util.js';
 import { AppModule } from './app.module.js';
+import { resolveLogLevels } from './log.options.js';
 
 /** 启动函数 */
 async function bootstrap() {
   /** 应用 */
-  const app = await NestFactory.create<NestExpressApplication>(AppModule);
+  const app = await NestFactory.create<NestExpressApplication>(AppModule, {
+    // 只输出异常与告警（默认）；请求级追踪等 info/debug 输出会把真正的故障淹没，
+    // 需要排查时用环境变量 LOG_LEVEL=log|debug|all 临时放开
+    logger: resolveLogLevels(),
+  });
   // 信任反向代理（让 Express 正确解析 X-Forwarded-For 获取真实客户端 IP）
   app.set('trust proxy', 1);
   // 开启全局跨域许可

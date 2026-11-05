@@ -1,5 +1,4 @@
 // 外部依赖
-import { Logger } from '@nestjs/common';
 import { Entity, Column, PrimaryColumn, Index, AfterLoad } from 'typeorm';
 
 /** 请求日志表 */
@@ -61,8 +60,6 @@ export class ReqEntity {
   /** 对长整型数据进行数据转换 */
   @AfterLoad()
   reqLoad() {
-    const logger = new Logger(ReqEntity.name);
-    logger.debug('触发日志load操作');
     this.reqId = this.reqId ? Number(this.reqId) : 0;
     this.startAt = this.startAt ? Number(this.startAt) : 0;
     this.endAt = this.endAt ? Number(this.endAt) : 0;

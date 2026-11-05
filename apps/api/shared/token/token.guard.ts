@@ -5,7 +5,6 @@ import {
   CanActivate,
   ExecutionContext,
   Injectable,
-  Logger,
 } from '@nestjs/common';
 import { Reflector } from '@nestjs/core';
 import { AddressInfo } from 'net';
@@ -25,7 +24,6 @@ import { UserService } from '../user/user.service.js';
  */
 @Injectable()
 export class TokenGuard implements CanActivate {
-  private readonly logger = new Logger(TokenGuard.name);
   /**
    * 构造函数
    *
@@ -73,7 +71,6 @@ export class TokenGuard implements CanActivate {
     const path = req.path;
     /** 请求客户端IP（真实公网IP） */
     const clientIp = getClientIp(req);
-    this.logger.debug('clientIp', clientIp);
     res['ip'] = clientIp;
     /** 响应服务端信息 */
     const addressInfo = req.socket.address() as AddressInfo;
@@ -95,7 +92,6 @@ export class TokenGuard implements CanActivate {
       startAt: at,
     } as Partial<ReqEntity>;
     res['params'] = params;
-    this.logger.debug('url', path, path.startsWith('/stock'));
     if (path.startsWith('/passport')) {
       // 返回验证通过
       return true;

@@ -106,7 +106,7 @@ describe('DbMonitorService', () => {
       expect(spies.warn).toHaveBeenCalled();
     });
 
-    it('拿到连接池时挂上三类事件并每 60 秒探活一次', async () => {
+    it('拿到连接池时只挂异常与建连事件（不挂 remove），并每 60 秒探活一次', async () => {
       /** 连接池替身 */
       const { pool } = poolStub();
       /** 被测服务与数据源替身 */
@@ -114,7 +114,8 @@ describe('DbMonitorService', () => {
       service.onModuleInit();
       expect(pool.on).toHaveBeenCalledWith('error', expect.any(Function));
       expect(pool.on).toHaveBeenCalledWith('connect', expect.any(Function));
-      expect(pool.on).toHaveBeenCalledWith('remove', expect.any(Function));
+      // 回归：连接移除属空闲回收的正常现象，不再挂监听、不再产出日志
+      expect(pool.on).not.toHaveBeenCalledWith('remove', expect.any(Function));
 
       await vi.advanceTimersByTimeAsync(60000);
       expect(dataSource.query).toHaveBeenCalledWith('SELECT 1');
@@ -153,9 +154,10 @@ describe('DbMonitorService', () => {
 
       dataSource.query.mockResolvedValue([]);
       await vi.advanceTimersByTimeAsync(60000);
-      // 恢复后给出此前连续失败次数，便于判断断连时长
+      // 恢复后给出此前连续失败次数，便于判断断连时长；
+      // 注：必须是 warn —— 默认只输出 error/warn，写成 info 会让「已自愈」看不见
       expect(
-        messagesOf('log').some((text) =>
+        messagesOf('warn').some((text) =>
           text.includes('已恢复正常，此前连续失败 2 次'),
         ),
       ).toBe(true);
@@ -237,20 +239,18 @@ describe('DbMonitorService', () => {
       expect(warns.some((text) => text.includes('4321'))).toBe(true);
     });
 
-    it('连接移除只在刚发生过异常时记录，避免空闲回收刷日志', () => {
+    it('正常建连不产出任何日志（默认只留异常与告警）', () => {
       /** 连接池替身与回调表 */
       const { pool, listeners } = poolStub();
       /** 被测服务 */
       const { service } = serviceOf(pool);
       service.onModuleInit();
 
-      listeners.remove({ processID: 1 });
-      expect(spies.debug).not.toHaveBeenCalled();
+      listeners.connect({ processID: 1 });
 
-      listeners.error(new Error('boom'));
-      spies.debug.mockClear();
-      listeners.remove({ processID: 1 });
-      expect(spies.debug).toHaveBeenCalled();
+      expect(spies.debug).not.toHaveBeenCalled();
+      expect(spies.warn).not.toHaveBeenCalled();
+      expect(spies.log).not.toHaveBeenCalled();
     });
   });
 });

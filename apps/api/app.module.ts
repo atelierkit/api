@@ -1,5 +1,5 @@
 // 外部依赖
-import { Logger, Module, ValidationPipe } from '@nestjs/common';
+import { Module, ValidationPipe } from '@nestjs/common';
 import { ConfigModule } from '@nestjs/config';
 import { APP_FILTER, APP_GUARD, APP_INTERCEPTOR, APP_PIPE } from '@nestjs/core';
 import { TypeOrmModule } from '@nestjs/typeorm';
@@ -28,10 +28,6 @@ import { VALIDATION_PIPE_OPTIONS } from './validation.options.js';
     }),
     TypeOrmModule.forRootAsync({
       useFactory: () => {
-        /** 日志器 */
-        const logger = new Logger(AppModule.name);
-        logger.debug(`当前APP_PROFILE ${process.env.APP_PROFILE}`);
-        logger.debug(`当前环境 ${process.env.NODE_ENV}`);
         /** 是否自动同步表结构，注：仅开发/演示环境开启 */
         const synchronize = process.env.NODE_ENV
           ? ['dev', 'demo'].includes(process.env.NODE_ENV)
@@ -50,7 +46,6 @@ import { VALIDATION_PIPE_OPTIONS } from './validation.options.js';
           : 5432;
         /** 数据库名 */
         const database = process.env.POSTGRES_DB;
-        logger.debug(`当前数据库用户 ${process.env.POSTGRES_USER}`);
         if (!process.env.POSTGRES_USER) {
           throw new Error('未配置数据库用户');
         }

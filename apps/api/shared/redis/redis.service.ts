@@ -1,5 +1,5 @@
 // 外部依赖
-import { Injectable, Logger, OnApplicationBootstrap } from '@nestjs/common';
+import { Injectable, OnApplicationBootstrap } from '@nestjs/common';
 import { Redis } from 'ioredis';
 // 内部依赖
 import { random } from '../common/common.util.js';
@@ -28,7 +28,6 @@ export interface Code {
 /** 缓存服务（Redis） */
 @Injectable()
 export class RedisService extends Redis implements OnApplicationBootstrap {
-  private readonly logger = new Logger(RedisService.name);
   /** 构造函数 */
   constructor() {
     // 进行配置参数验证
@@ -48,7 +47,6 @@ export class RedisService extends Redis implements OnApplicationBootstrap {
     /** 缓存配置 */
     const options = { host, port, db, password };
     super(options);
-    this.logger.debug('应用缓存已连接');
   }
 
   /**
@@ -57,7 +55,6 @@ export class RedisService extends Redis implements OnApplicationBootstrap {
    */
   async onApplicationBootstrap() {
     if (process.env.REDIS_INIT === 'true') {
-      this.logger.debug('正在初始化缓存...');
       // 清空当前数据库的所有缓存记录
       await this.flushdb();
       /** 队列缓存数据库 */
@@ -72,7 +69,6 @@ export class RedisService extends Redis implements OnApplicationBootstrap {
         await bullClient.flushdb();
         await bullClient.quit();
       }
-      this.logger.debug('缓存初始化完成');
     }
   }
 

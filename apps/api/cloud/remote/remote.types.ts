@@ -103,6 +103,23 @@ export interface RemoteNetworkInterface {
   mtu: number;
   /** 地址（带前缀长度，如 `192.168.1.3/24`），IPv4 在前、IPv6 在后 */
   addresses: string[];
+  /**
+   * 是否物理网口
+   *
+   * 注：判据是 `/sys/class/net/<接口>/device` 是否存在 —— 只有真实硬件（含有线 / 无线网卡）
+   * 才有这个软链接；`docker0` / `br-*` / `veth*` / `tun` / `wg` 都没有，
+   * 而读它们的 `speed` 只会得到伪造的 `10000` 或 `-1`，显示出来就是假带宽
+   */
+  physical: boolean;
+  /**
+   * 链路协商速率（Mb/s）
+   *
+   * 注：来自 `/sys/class/net/<接口>/speed`，**只有物理网口且链路 up 时才有值**
+   * （网线没插时内核返回 EINVAL，读出来是空）；取不到为 0
+   */
+  speedMbps: number;
+  /** 双工模式：`full` / `half` / `unknown`（虚拟设备），取不到为空串 */
+  duplex: string;
   /** 累计接收字节 */
   rxBytes: number;
   /** 累计发送字节 */

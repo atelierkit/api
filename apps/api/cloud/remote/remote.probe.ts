@@ -46,6 +46,8 @@ export const SUMMARY_MARKERS = {
   addr: '@@ADDR@@',
   /** 接口流量（`/proc/net/dev`，任何 Linux 都有） */
   netdev: '@@NETDEV@@',
+  /** 物理网口的协商速率与双工（`/sys/class/net/<接口>/speed`） */
+  speed: '@@SPEED@@',
   /** 默认路由（`ip route show default`） */
   route: '@@ROUTE@@',
   /** 默认路由兜底（`/proc/net/route`，精简系统里没有 `ip` 命令） */
@@ -95,6 +97,11 @@ export const SUMMARY_COMMAND = [
   // 注：`/proc/net/dev` 给流量，且在没有 `ip` 命令的精简镜像里是唯一能拿到接口名的来源
   `echo '${SUMMARY_MARKERS.netdev}'`,
   'cat /proc/net/dev 2>/dev/null',
+  // 注 1：只列**物理网口**（有 `device` 软链接）—— 虚拟设备的 `speed` 是伪造值
+  // （`docker0` 给 `-1`、`br-*` / `veth*` 给 `10000`），显示出来就是假带宽
+  // 注 2：网线没插时内核的 `speed` 读出来是空（EINVAL），故 `2>/dev/null` 且字段允许缺失
+  `echo '${SUMMARY_MARKERS.speed}'`,
+  'for d in /sys/class/net/*; do if [ -e "$d/device" ]; then echo "$(basename $d) $(cat $d/speed 2>/dev/null) $(cat $d/duplex 2>/dev/null)"; fi; done',
   `echo '${SUMMARY_MARKERS.route}'`,
   'ip route show default 2>/dev/null',
   `echo '${SUMMARY_MARKERS.netroute}'`,
@@ -520,22 +527,57 @@ function trafficOf(
 }
 
 /**
- * 合并三份来源得到接口清单
+ * 解析物理网口的协商速率
  *
- * 注 1：三份来源各有对方没有的接口 —— 只有 `/proc/net/dev` 有流量的（veth）、
+ * 注：一行的形状是 `enp1s0 1000 full`；网线没插时内核读取 `speed` 会失败，
+ * 该行退化成只有接口名（`enp2s0`），故后两个字段都可能缺失
+ *
+ * @param lines `@@SPEED@@` 段的行
+ * @returns 接口名 → 速率与双工
+ */
+function speedsOf(
+  lines: readonly string[],
+): Map<string, { speedMbps: number; duplex: string }> {
+  /** 接口名 → 速率与双工 */
+  const result = new Map<string, { speedMbps: number; duplex: string }>();
+  for (const line of lines) {
+    /** 字段：接口名 速率 双工 */
+    const fields = line.trim().split(/\s+/);
+    /** 接口名 */
+    const name = fields[0] ?? '';
+    if (name === '') {
+      continue;
+    }
+    result.set(name, {
+      // 注：`-1` 是内核对「链路不可用」的返回，一律按 0（无值）处理
+      speedMbps: Math.max(0, Math.round(numberOrZero(fields[1] ?? ''))),
+      duplex: (fields[2] ?? '').trim(),
+    });
+  }
+  return result;
+}
+
+/**
+ * 合并多份来源得到接口清单
+ *
+ * 注 1：各份来源各有对方没有的接口 —— 只有 `/proc/net/dev` 有流量的（veth）、
  * 只有 `ip addr` 有地址而没有 MAC 的，所以取并集
  * 注 2：链路信息缺失时状态给 `unknown`，不猜成 UP / DOWN
- * 注 3：地址排序为「IPv4 在前、IPv6 在后」，组内保留系统给的顺序
+ * 注 3：速率段只含**物理网口**，故「出现在速率段里」就是 `physical` 的判据 ——
+ * 虚拟设备既不该显示带宽，其 `speed` 也是内核编的假值
+ * 注 4：地址排序为「IPv4 在前、IPv6 在后」，组内保留系统给的顺序
  *
  * @param linkLines `ip -o link show` 的行
  * @param addrLines `ip -o addr show` 的行
  * @param netdevLines `/proc/net/dev` 的行
+ * @param speedLines `@@SPEED@@` 段的行（物理网口的速率与双工）
  * @returns 接口清单，按接口名升序
  */
 export function interfacesOf(
   linkLines: readonly string[],
   addrLines: readonly string[],
   netdevLines: readonly string[],
+  speedLines: readonly string[] = [],
 ): RemoteNetworkInterface[] {
   /** 接口名 → 汇总 */
   const merged = new Map<string, RemoteNetworkInterface>();
@@ -562,6 +604,9 @@ export function interfacesOf(
       mac: '',
       mtu: 0,
       addresses: [],
+      physical: false,
+      speedMbps: 0,
+      duplex: '',
       rxBytes: 0,
       txBytes: 0,
     };
@@ -595,6 +640,17 @@ export function interfacesOf(
     }
     item.rxBytes = traffic.rx;
     item.txBytes = traffic.tx;
+  }
+  for (const [name, speed] of speedsOf(speedLines)) {
+    /** 汇总项 */
+    const item = ensure(name);
+    if (item === null) {
+      continue;
+    }
+    // 注：能进这一段就说明有 `device` 软链接 ⇒ 物理网口
+    item.physical = true;
+    item.speedMbps = speed.speedMbps;
+    item.duplex = speed.duplex;
   }
   for (const item of merged.values()) {
     // 注：`Array.prototype.sort` 是稳定排序，同族地址之间的顺序不变
@@ -768,6 +824,7 @@ export function parseLinuxSummary(raw: string): RemoteSummary {
       sections.get('link') ?? [],
       sections.get('addr') ?? [],
       sections.get('netdev') ?? [],
+      sections.get('speed') ?? [],
     ),
     gateways: gatewaysOf(
       sections.get('route') ?? [],

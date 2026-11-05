@@ -151,6 +151,10 @@
       DNS 优先读 `/run/systemd/resolve/resolv.conf`（`/etc/resolv.conf` 在 systemd-resolved 下只有存根 `127.0.0.53`），
       网关优先 `ip route show default`、兜底 `/proc/net/route`（小端十六进制，需按字节倒序解）。
       不用 `ip -j` / `ip -br`（老 iproute2 / BusyBox 分别不认），只用两边都支持的 `-o`。
+      链路带宽另取 `/sys/class/net/<接口>/{speed,duplex}`，**只用有 `device` 软链接的物理网口**：
+      `br-*` / `veth*` 的 `speed` 是内核编的 `10000`、`docker0` 是 `-1`，虚拟设备显示带宽就是假数据；
+      网线没插时 `speed` 读出来是空（EINVAL），速率给 0、前端文案给「未连接」。该口径是**协商速率**，
+      不是实测吞吐（吞吐要两次采样，概览是单次快照）。不引 `ethtool`（默认镜像常没装、部分型号要 root）。
 - **`apps/api/tencent`**：**腾讯云模块**（`TencentModule`），
   接口前缀 `tencent/`（`ssl` / `dns` / `domain` / `cdn` / `firewall` / `lighthouse`），全部 `@Allow('admin')`；
   依赖 `CloudModule` —— `KeyService` 取密钥、`KongService` + `ObjectService` 把 SSL 证书部署到 KONG 站点。约定：

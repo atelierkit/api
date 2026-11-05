@@ -86,6 +86,15 @@ describe('SUMMARY_COMMAND', () => {
     // 注：不用 `ip -j`（老版本 iproute2 不认）与 `-br`（BusyBox 不认），只求一行一接口
     expect(SUMMARY_COMMAND).not.toContain('ip -j');
   });
+
+  it('链路带宽只读物理网口（有 device 软链接的），虚拟设备的 speed 是伪造值', () => {
+    expect(SUMMARY_COMMAND).toContain('/sys/class/net/*');
+    expect(SUMMARY_COMMAND).toContain('[ -e "$d/device" ]');
+    expect(SUMMARY_COMMAND).toContain('$(cat $d/speed 2>/dev/null)');
+    expect(SUMMARY_COMMAND).toContain('$(cat $d/duplex 2>/dev/null)');
+    // 注：不用 ethtool —— 默认镜像里常常没装，且部分型号要 root 才能读速率
+    expect(SUMMARY_COMMAND).not.toContain('ethtool');
+  });
 });
 
 describe('tcpProbe', () => {
@@ -309,6 +318,8 @@ describe('网络信息', () => {
     '1: lo: <LOOPBACK,UP,LOWER_UP> mtu 65536 qdisc noqueue state UNKNOWN mode DEFAULT group default qlen 1000\\    link/loopback 00:00:00:00:00:00 brd 00:00:00:00:00:00',
     '2: enp1s0: <BROADCAST,MULTICAST,UP,LOWER_UP> mtu 1500 qdisc mq state UP mode DEFAULT group default qlen 1000\\    link/ether 00:90:27:e3:67:c3 brd ff:ff:ff:ff:ff:ff',
     '3: enp2s0: <BROADCAST,MULTICAST> mtu 1500 qdisc noop state DOWN mode DEFAULT group default qlen 1000\\    link/ether 00:90:27:e3:67:c4 brd ff:ff:ff:ff:ff:ff',
+    '4: enp3s0: <BROADCAST,MULTICAST> mtu 1500 qdisc noop state DOWN mode DEFAULT group default qlen 1000\\    link/ether 00:90:27:e3:67:c5 brd ff:ff:ff:ff:ff:ff',
+    '5: enp4s0: <BROADCAST,MULTICAST> mtu 1500 qdisc noop state DOWN mode DEFAULT group default qlen 1000\\    link/ether 00:90:27:e3:67:c6 brd ff:ff:ff:ff:ff:ff',
     '6: docker0: <NO-CARRIER,BROADCAST,MULTICAST,UP> mtu 1500 qdisc noqueue state DOWN mode DEFAULT group default \\    link/ether 3e:2c:1b:e8:c3:5f brd ff:ff:ff:ff:ff:ff',
     '7: br-9b545bac22e9: <BROADCAST,MULTICAST,UP,LOWER_UP> mtu 1500 qdisc noqueue state UP mode DEFAULT group default \\    link/ether 52:70:8e:82:7c:89 brd ff:ff:ff:ff:ff:ff',
     '8: vethcbaaa82@if2: <BROADCAST,MULTICAST,UP,LOWER_UP> mtu 1500 qdisc noqueue master br-9b545bac22e9 state UP mode DEFAULT group default \\    link/ether 06:7e:b2:69:cd:b8 brd ff:ff:ff:ff:ff:ff link-netnsid 0',
@@ -333,14 +344,18 @@ describe('网络信息', () => {
     '    lo:  131840     954    0    0    0     0          0         0   131840     954    0    0    0     0       0          0',
     'enp1s0: 586022896  501913   42 25737    0    23          0      5159 57743295  422301    0    0    0     0       0          0',
     'enp2s0:       0       0    0    0    0     0          0         0        0       0    0    0    0     0       0          0',
+    'enp3s0:       0       0    0    0    0     0          0         0        0       0    0    0    0     0       0          0',
+    'enp4s0:       0       0    0    0    0     0          0         0        0       0    0    0    0     0       0          0',
     'docker0:     280      10    0    0    0     0          0         0     1760      16    0    0    0     0       0          0',
     'br-9b545bac22e9: 67522298  477478    0    0    0     0          0         0 613579905  600118    0    0    0     0       0          0',
     'vethcbaaa82:  632953    2529    0    0    0     0          0         0   249925    3192    0    0    0     0       0          0',
   ];
+  /** `@@SPEED@@` 的真机输出，注：只有物理网口；`enp2s0` 没插线时只有接口名（速度读不到） */
+  const SPEED = ['enp1s0 1000 full', 'enp2s0', 'enp3s0', 'enp4s0'];
 
   it('三份来源合并到同一个接口上（状态 / MAC / MTU / 地址 / 流量）', () => {
     /** 接口清单 */
-    const list = interfacesOf(LINK, ADDR, NETDEV);
+    const list = interfacesOf(LINK, ADDR, NETDEV, SPEED);
     expect(list.find((item) => item.name === 'enp1s0')).toEqual({
       name: 'enp1s0',
       state: 'up',
@@ -351,8 +366,54 @@ describe('网络信息', () => {
         '2409:8a44:94:a810:290:27ff:fee3:67c3/64',
         'fe80::290:27ff:fee3:67c3/64',
       ],
+      physical: true,
+      speedMbps: 1000,
+      duplex: 'full',
       rxBytes: 586022896,
       txBytes: 57743295,
+    });
+  });
+
+  it('链路带宽只给物理网口：网桥与 docker0 没有 device 软链接，不该显示速度', () => {
+    /** 接口清单 */
+    const list = interfacesOf(LINK, ADDR, NETDEV, SPEED);
+    expect(list.filter((item) => item.physical).map((item) => item.name)).toEqual([
+      'enp1s0',
+      'enp2s0',
+      'enp3s0',
+      'enp4s0',
+    ]);
+    // 注：内核给 br-* / veth 报的 `10000` 是编的，没进速率段就不会出现
+    for (const item of list.filter((entry) => !entry.physical)) {
+      expect(item.speedMbps).toBe(0);
+      expect(item.duplex).toBe('');
+    }
+  });
+
+  it('网线没插的物理网口仍标 physical，但速率为 0（内核读 speed 返回 EINVAL）', () => {
+    /** enp2s0 */
+    const down = interfacesOf(LINK, ADDR, NETDEV, SPEED).find(
+      (item) => item.name === 'enp2s0',
+    );
+    expect(down?.physical).toBe(true);
+    expect(down?.speedMbps).toBe(0);
+    expect(down?.duplex).toBe('');
+  });
+
+  it('内核返回 -1（链路不可用）时归一成 0，不把负值带到页面上', () => {
+    /** 接口清单 */
+    const list = interfacesOf([], [], [], ['enp5s0 -1 unknown']);
+    expect(list[0]).toEqual({
+      name: 'enp5s0',
+      state: 'unknown',
+      mac: '',
+      mtu: 0,
+      addresses: [],
+      physical: true,
+      speedMbps: 0,
+      duplex: 'unknown',
+      rxBytes: 0,
+      txBytes: 0,
     });
   });
 
@@ -362,6 +423,8 @@ describe('网络信息', () => {
       'docker0',
       'enp1s0',
       'enp2s0',
+      'enp3s0',
+      'enp4s0',
     ]);
   });
 
@@ -405,6 +468,9 @@ describe('网络信息', () => {
         mac: '',
         mtu: 0,
         addresses: [],
+        physical: false,
+        speedMbps: 0,
+        duplex: '',
         rxBytes: 1024,
         txBytes: 2048,
       },
@@ -412,8 +478,12 @@ describe('网络信息', () => {
   });
 
   it('接口名带 @ifN（veth 对端）时能剥掉后缀，不会把名字截成空', () => {
-    /** 接口清单 */
-    const list = interfacesOf([LINK[5] ?? ''], [], []);
+    /** 接口清单，注：取 fixture 里那条 `vethxxx@if2`，别用下标 —— 前面增删网口就会取错行 */
+    const list = interfacesOf(
+      [LINK.find((line) => line.includes('veth')) ?? ''],
+      [],
+      [],
+    );
     expect(list).toEqual([]);
     /** 放开过滤后单独验名字解析：用 br 前缀的假名字带 @ 后缀 */
     const bridged = interfacesOf(
@@ -509,6 +579,22 @@ describe('网络信息', () => {
     /** 概览输出 */
     const raw = ['@@RESOLV@@', 'nameserver 192.168.1.1', '@@END@@'].join('\n');
     expect(parseLinuxSummary(raw).dnsServers).toEqual(['192.168.1.1']);
+  });
+
+  it('概览把速率段接到对应网口上（`@@SPEED@@` 只列物理网口）', () => {
+    /** 概览输出 */
+    const raw = [
+      '@@LINK@@',
+      LINK[1] ?? '',
+      '@@SPEED@@',
+      'enp1s0 1000 full',
+      '@@END@@',
+    ].join('\n');
+    /** 唯一网口 */
+    const item = parseLinuxSummary(raw).interfaces[0];
+    expect(item?.physical).toBe(true);
+    expect(item?.speedMbps).toBe(1000);
+    expect(item?.duplex).toBe('full');
   });
 
   it('网络段全缺失时三组字段都是空数组（不抛异常）', () => {

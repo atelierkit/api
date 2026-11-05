@@ -52,5 +52,11 @@ export const RESET_VALID_MINUTES = 2;
 /** 重置密码验证码最大尝试次数 */
 export const RESET_FAIL_MAX = 5;
 
+/** 更换邮箱验证码有效期（分钟） */
+export const EMAIL_CHANGE_VALID_MINUTES = 2;
+
+/** 更换邮箱验证码最大尝试次数 */
+export const EMAIL_CHANGE_FAIL_MAX = 5;
+
 /** 系统允许的最大用户数 */
 export const USER_MAX = 20;

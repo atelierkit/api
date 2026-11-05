@@ -120,6 +120,27 @@ export class ResetDto {
   password!: string;
 }
 
+/** 更换邮箱-发送验证码DTO */
+export class EmailCodeDto {
+  /** 新邮箱，注：验证码发到这里；改绑成功前原邮箱仍然有效 */
+  @IsNotEmpty({ message: '电子邮箱不能为空！' })
+  @IsEmail({}, { message: '电子邮箱格式不正确！' })
+  email!: string;
+}
+
+/** 更换邮箱-确认DTO */
+export class EmailConfirmDto {
+  /** 新邮箱，注：必须与发送验证码时提交的邮箱一致，否则验证码不认 */
+  @IsNotEmpty({ message: '电子邮箱不能为空！' })
+  @IsEmail({}, { message: '电子邮箱格式不正确！' })
+  email!: string;
+
+  /** 邮箱验证码 */
+  @IsNotEmpty({ message: '验证码不能为空！' })
+  @IsString({ message: '验证码格式不正确！' })
+  code!: string;
+}
+
 /** 用户信息修改DTO */
 export class UserUpdateDto {
   /** 昵称 */

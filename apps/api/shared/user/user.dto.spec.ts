@@ -6,6 +6,8 @@ import { describe, expect, it } from 'vitest';
 import { PASSWORD_MAX } from './user.constant.js';
 import {
   CheckDto,
+  EmailCodeDto,
+  EmailConfirmDto,
   LoginDto,
   PasswordDto,
   RegisterDto,
@@ -121,6 +123,23 @@ describe('user.dto', () => {
           code: '123456',
           password: 'abc12345',
         }),
+      ).toHaveLength(0);
+    });
+  });
+
+  describe('EmailCodeDto / EmailConfirmDto', () => {
+    it('发送验证码只要求合法的新邮箱', async () => {
+      expect(await fieldsOf(EmailCodeDto, { email: 'a@b.com' })).toHaveLength(0);
+      expect(await fieldsOf(EmailCodeDto, { email: 'a@b' })).toContain('email');
+      expect(await fieldsOf(EmailCodeDto, {})).toContain('email');
+    });
+
+    it('确认改绑要求邮箱与验证码', async () => {
+      expect(await fieldsOf(EmailConfirmDto, {})).toEqual(
+        expect.arrayContaining(['email', 'code']),
+      );
+      expect(
+        await fieldsOf(EmailConfirmDto, { email: 'a@b.com', code: '123456' }),
       ).toHaveLength(0);
     });
   });

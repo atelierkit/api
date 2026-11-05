@@ -139,6 +139,11 @@ export function verifyPassword(plain: string, stored: string): Promise<boolean>;
 
 ### 4.3 接口清单
 
+> ⚠️ 2026-11-05 变更：更换邮箱从「发激活链接、点链接改绑」改为「验证码两步」——
+> `POST /user/email` 只把 6 位验证码发到**新邮箱**，`POST /user/email/confirm` 校验通过后落库；
+> 原 `POST /passport/activate` 接口与 web 的 `/passport/activate/:code` 页面已一并删除，
+> 邮件正文不再含任何链接（`WEB_URL` 随之废弃）。下表已按新口径更新。
+
 | 方法 | 路径 | 入参 | 返回 | 说明 |
 | --- | --- | --- | --- | --- |
 | GET | `/passport/init` | — | `{initialized: boolean}` | **新增**，免令牌；前端每次整页加载探测一次（见 4.6） |
@@ -151,8 +156,9 @@ export function verifyPassword(plain: string, stored: string): Promise<boolean>;
 | POST | `/passport/reset` | `{email}` | `{code: 0, msg}` | **新增**（决策 3 推荐：找回密码，第一步发码） |
 | POST | `/passport/reset/confirm` | `{email, code, password}` | `{code: 0, msg}` | **新增**（第二步：校验验证码并改密） |
 | POST | `/user/password` | `{oldPassword, newPassword}` | `{code: 0, msg}` | **新增**，登录后改密 |
-| POST | `/passport/activate` | `{code}` | 不变 | 保留（改邮箱激活） |
-| POST | `/user/email` | `{email}` | 不变 | 保留（改邮箱，走邮件链接） |
+| POST | `/passport/activate` | — | — | **删除**（2026-11-05：改为验证码流程，见本节开头的变更说明） |
+| POST | `/user/email` | `{email}` | `{code: 0, msg}` | **改**（2026-11-05：只发验证码到新邮箱，不改绑） |
+| POST | `/user/email/confirm` | `{email, code}` | `{code: 0, msg}` | **新增**（2026-11-05：校验验证码并落库） |
 | POST | `/passport/status` | — | — | **删除**（被 `check` 取代） |
 
 令牌相关（`/user/refresh`、`/user/valid`、`DELETE /user/logout`）**完全不动**，请求头仍是 `token: <id>:<随机码>`。

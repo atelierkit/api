@@ -34,6 +34,8 @@ import { normalizeDevice, sameDevice } from '../token/token.util.js';
 import { DUMMY_HASH, hashPassword, verifyPassword } from './password.util.js';
 import {
   CHECK_LIMIT_PER_MINUTE,
+  EMAIL_CHANGE_FAIL_MAX,
+  EMAIL_CHANGE_VALID_MINUTES,
   LOGIN_FAIL_MAX,
   LOGIN_FAIL_TTL,
   LOGIN_LOCK_TTL,
@@ -48,6 +50,7 @@ import {
   USER_MAX,
 } from './user.constant.js';
 import {
+  EmailConfirmDto,
   LoginDto,
   PasswordDto,
   RegisterDto,
@@ -1122,20 +1125,29 @@ export class UserService extends CommonService<UserEntity, UserLogEntity> {
   }
 
   /**
-   * 修改登录邮箱
+   * 发送更换邮箱验证码
+   *
+   * 注 1：验证码发到**新邮箱**，本方法不落库 —— 邮箱要等 `confirmEmail` 校验通过才真正改绑，
+   *      这与旧版「发激活链接、点链接才改」是同一个安全前提（能收到新邮箱的信件才算拥有它），只是把
+   *      「跨设备点链接」换成了「当前会话内填验证码」
+   * 注 2：频控按**用户**记（60 秒一次），换着目标邮箱刷也绕不过去；另有 IP 级限流挡多账号并发轰炸
+   * 注 3：不校验原密码 —— 能拿到登录态即可发起改绑，改绑本身不改密码、也不影响现有会话
    *
    * @param id 用户ID
    * @param email 新邮箱
    * @param ip 客户端IP
-   * @returns 激活用户ID
+   * @returns 响应报文
    */
-  async email(id: number, email: string, ip: string = '') {
-    // IP 级限流，防止激活邮件被刷
+  async sendEmailCode(id: number, email: string, ip: string = '') {
+    // IP 级限流，防止验证码邮件被刷
     await this.limitByIp(ip, 'email');
     /** 用户 */
     const user = await this.show(id, 'status');
     if (!user) {
       throw new NotFoundException(`当前用户不存在！`);
+    }
+    if (!user.status) {
+      throw new ForbiddenException('用户已被禁用！');
     }
     // 邮箱归一化，与登录/注册保持一致
     email = this.normalizeEmail(email);
@@ -1148,48 +1160,101 @@ export class UserService extends CommonService<UserEntity, UserLogEntity> {
     if (exist) {
       throw new ConflictException(`邮箱${email}已被使用，无法修改！`);
     }
-    /** 缓存信息 */
-    const cache: object = { id, email };
-    /** 随机码消息 */
-    const code = await this.redisSrv.addCode('activate', 100, 30, cache);
-    /** 激活链接 */
-    const url = `${process.env.WEB_URL}passport/activate/${code.code}`;
+    /** 发送频控键，注：按用户计数，换目标邮箱刷不过去 */
+    const limitKey = `limit:email:${id}`;
+    /** 频控标记，注：60 秒内同一账号只允许发送一次 */
+    const locked = await this.redisSrv.set(limitKey, '1', 'EX', 60, 'NX');
+    if (!locked) {
+      /** 剩余限流秒数 */
+      const retryAfter = (await this.redisSrv.ttl(limitKey)) || 60;
+      throw new RetryAfterException(
+        `验证码发送过于频繁，请${retryAfter}秒后再试！`,
+        retryAfter,
+      );
+    }
+    /** 验证码，注：与找回密码同样是 6 位数字 */
+    const captcha = random(6, 'number');
+    /** 缓存键，注：按用户维度 —— 一个账号同时只保留一个待确认的邮箱 */
+    const key = `email:${id}`;
+    /** 当前时间 */
+    const at = Date.now();
+    /** 业务过期时间 */
+    const expired = at + EMAIL_CHANGE_VALID_MINUTES * 60000;
+    // 缓存验证码与失败计数，注：目标邮箱一并缓存，确认时必须与之匹配
+    await this.redisSrv.hmset(key, {
+      id,
+      email,
+      captcha,
+      fails: 0,
+      expired,
+      createAt: at,
+      updateAt: at,
+    });
+    // 业务有效期外额外留 30 秒缓冲，避免前端刚拿到就过期
+    await this.redisSrv.pexpireat(key, expired + 30000);
     /** 邮件内容 */
-    const mail: Email = {
-      to: email, // 收件人邮箱
-      subject: '个人量化工具的修改邮箱验证邮件', // 邮件主题
-      html: `<p>请点击该<a href="${url}" target="_blank">新邮箱激活链接</a>。</p>
-      <p>或将以下地址复制到浏览器地址栏中打开：</p>
-      <p>${url}</p>`, // HTML内容（可选）
+    const mailBody: Email = {
+      to: email,
+      subject: '个人量化工具的更换邮箱验证码',
+      html: `<p>个人量化工具的更换邮箱验证码</p><p>验证码：<b>${captcha}</b></p><p>该验证码有效期只有${EMAIL_CHANGE_VALID_MINUTES}分钟，请及时使用！</p>`,
     };
     // 发送邮件
-    await this.emailSrv.send(mail);
-    return id;
+    await this.emailSrv.send(mailBody);
+    return {
+      code: 0,
+      msg: `验证码已发送至${email}，有效期${EMAIL_CHANGE_VALID_MINUTES}分钟，请及时使用！`,
+    };
   }
 
   /**
-   * 激活新邮箱
+   * 确认更换邮箱
    *
-   * @param code 激活码
-   * @returns 激活用户ID
+   * 注 1：验证码与目标邮箱必须同时匹配缓存 —— 期间用户改过邮箱的话，旧验证码不能直接用来改绑
+   * 注 2：验证码错误累计到上限直接销毁，防止 6 位数字被穷举
+   * 注 3：落库前再查一次占用，避免这两分钟里邮箱被别的账号抢注
+   *
+   * @param id 用户ID
+   * @param value 确认信息
+   * @param reqId 请求日志ID
+   * @returns 响应报文
    */
-  async activate(code: string, reqId: number = 0) {
+  async confirmEmail(id: number, value: EmailConfirmDto, reqId: number = 0) {
+    /** 归一化邮箱 */
+    const email = this.normalizeEmail(value.email);
+    /** 缓存键 */
+    const key = `email:${id}`;
     /** 缓存数据 */
-    const cache: Record<string, string> = await this.redisSrv.hgetall(
-      `activate:${code}`,
-    );
+    const cache: Record<string, string> = await this.redisSrv.hgetall(key);
     if (!cache || !cache.email) {
-      throw new NotFoundException('激活地址已过期！');
+      throw new BadRequestException('验证码已失效或已过期，请重新获取！');
     }
-    /** 用户ID */
-    const id = Number(cache.id);
+    // 业务有效期校验，注：hgetall 返回全 string，需显式转换为数字比较
+    if (Number(cache.expired) < Date.now()) {
+      await this.redisSrv.del(key);
+      throw new BadRequestException('验证码已失效或已过期，请重新获取！');
+    }
+    if (cache.email !== email) {
+      throw new BadRequestException('验证码与该邮箱不匹配，请重新获取验证码！');
+    }
+    if (String(cache.captcha) !== String(value.code ?? '').trim()) {
+      /** 连续失败次数 */
+      const fails = await this.redisSrv.hincrby(key, 'fails', 1);
+      if (fails >= EMAIL_CHANGE_FAIL_MAX) {
+        // 失败次数超限，销毁该验证码，防止被暴力破解
+        await this.redisSrv.del(key);
+        throw new HttpException(
+          '验证码错误次数过多，请重新获取验证码！',
+          HttpStatus.GONE,
+        );
+      }
+      throw new BadRequestException('验证码不正确！');
+    }
     /** 用户 */
     const user = await this.userRepository.findOne({
       select: {
         id: true,
         email: true,
         status: true,
-        roles: true,
       } as FindOptionsSelect<UserEntity>,
       where: { id },
     });
@@ -1197,39 +1262,36 @@ export class UserService extends CommonService<UserEntity, UserLogEntity> {
       throw new NotFoundException('用户还未注册！');
     }
     if (!user.status) {
-      throw new UnauthorizedException('用户已被禁用！');
+      throw new ForbiddenException('用户已被禁用！');
     }
-    /** 检查结果 */
-    const exists = await this.userRepository.existsBy({ email: cache.email });
+    /** 占用标记，注：待确认期间邮箱可能被他人占用 */
+    const exists = await this.userRepository.existsBy({ email });
     if (exists) {
-      throw new ConflictException(`邮箱${cache.email}已被使用，无法修改！`);
+      throw new ConflictException(`邮箱${email}已被使用，无法修改！`);
     }
     /** 创建操作序号 */
     const operateId = await this.operateSrv.create('user', 'email', id);
-    // 更新用户信息
+    /** 修改时间 */
+    const at = Date.now();
+    // 更新用户邮箱
     const result = await this.userRepository.update(id, {
-      email: cache.email,
+      email,
       update: {
         userId: id,
         operate: 'chgemail',
         operateId,
         reqId,
-        at: Date.now(),
+        at,
       },
     });
-    if (result.affected) {
-      // 追加日志
-      this.addLog(operateId);
-      // 删除激活随机码缓存
-      await this.redisSrv.del(`activate:${code}`);
-      return {
-        code: 0,
-        msg: `用户绑定邮箱已成功修改为${cache.email}，可返回首页登录！`,
-      };
+    if (!result.affected) {
+      throw new UnprocessableEntityException(`邮箱修改失败！`);
     }
-    throw new UnprocessableEntityException(
-      `用户新邮箱${cache.email}激活失败！`,
-    );
+    // 追加日志
+    this.addLog(operateId);
+    // 删除验证码缓存，注：一个验证码只能用一次
+    await this.redisSrv.del(key);
+    return { code: 0, msg: `绑定邮箱已修改为${email}！` };
   }
 
   /**

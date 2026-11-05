@@ -1,13 +1,5 @@
 // 外部依赖
-import {
-  BadRequestException,
-  Controller,
-  Get,
-  Post,
-  Body,
-  Headers,
-  Req,
-} from '@nestjs/common';
+import { Controller, Get, Post, Body, Headers, Req } from '@nestjs/common';
 // 内部依赖
 import type { AppRequest } from '../common/request.types.js';
 import { ClientIp, ReqId } from '../req/req.decorator.js';
@@ -176,20 +168,5 @@ export class PassportController {
     @ClientIp() ip: string,
   ) {
     return this.userSrv.register(value, reqId, ip);
-  }
-
-  /**
-   * 校验激活码
-   *
-   * @param code 激活码
-   * @param reqId 请求ID
-   * @returns 校验结果
-   */
-  @Post('activate')
-  activate(@Body('code') code: string, @ReqId() reqId: number) {
-    if (!code) {
-      throw new BadRequestException(`请输入有效的激活码！`);
-    }
-    return this.userSrv.activate(code, reqId);
   }
 }

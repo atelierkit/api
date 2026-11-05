@@ -19,6 +19,7 @@ import { RedisService } from '../redis/redis.service.js';
 import { TOKEN_DEVICE_MAX } from '../token/token.constant.js';
 import { hashPassword } from './password.util.js';
 import {
+  EMAIL_CHANGE_FAIL_MAX,
   LOGIN_FAIL_MAX,
   LOGIN_FAIL_TTL,
   LOGIN_LOCK_TTL,
@@ -82,7 +83,7 @@ function redisStub() {
         _mode?: string,
         _seconds?: number,
         _nx?: string,
-      ) => 'OK',
+      ): Promise<string | null> => 'OK',
     ),
     del: vi.fn(async (_key: string) => 1),
     hgetall: vi.fn(async (_key: string) => ({}) as Record<string, string>),
@@ -693,12 +694,26 @@ describe('UserService', () => {
     });
   });
 
-  describe('email', () => {
+  describe('sendEmailCode', () => {
     it('用户不存在时 404', async () => {
       /** 被测服务与替身 */
       const { service } = serviceOf();
-      await expect(service.email(1, 'a@b.com')).rejects.toBeInstanceOf(
+      await expect(service.sendEmailCode(1, 'a@b.com')).rejects.toBeInstanceOf(
         NotFoundException,
+      );
+    });
+
+    it('用户被禁用时 403', async () => {
+      /** 被测服务与替身 */
+      const { service, repository } = serviceOf();
+      repository.findOne.mockResolvedValue({
+        id: 1,
+        username: 'admin',
+        status: false,
+        email: 'old@b.com',
+      });
+      await expect(service.sendEmailCode(1, 'a@b.com')).rejects.toBeInstanceOf(
+        ForbiddenException,
       );
     });
 
@@ -711,7 +726,7 @@ describe('UserService', () => {
         status: true,
         email: 'a@b.com',
       });
-      await expect(service.email(1, ' A@B.com ')).rejects.toThrow(
+      await expect(service.sendEmailCode(1, ' A@B.com ')).rejects.toThrow(
         '邮箱并未发生变化，无需修改！',
       );
     });
@@ -726,13 +741,39 @@ describe('UserService', () => {
         email: 'old@b.com',
       });
       repository.existsBy.mockResolvedValue(true);
-      await expect(service.email(1, 'new@b.com')).rejects.toBeInstanceOf(
+      await expect(service.sendEmailCode(1, 'new@b.com')).rejects.toBeInstanceOf(
         ConflictException,
       );
     });
 
-    it('成功时生成激活码并发送含激活链接的邮件', async () => {
-      process.env.WEB_URL = 'http://web/';
+    it('同一账号 60 秒内重复发送时 429，且不再生成验证码', async () => {
+      /** 被测服务与替身 */
+      const { service, repository, redis } = serviceOf();
+      repository.findOne.mockResolvedValue({
+        id: 1,
+        username: 'admin',
+        status: true,
+        email: 'old@b.com',
+      });
+      // set NX 返回 null 表示频控键已存在
+      redis.set.mockResolvedValue(null);
+      redis.ttl.mockResolvedValue(20);
+      /** 捕获的异常 */
+      const error = await service
+        .sendEmailCode(1, 'new@b.com')
+        .catch((err: unknown) => err);
+      expect(error).toBeInstanceOf(RetryAfterException);
+      expect(redis.set).toHaveBeenCalledWith(
+        'limit:email:1',
+        '1',
+        'EX',
+        60,
+        'NX',
+      );
+      expect(redis.hmset).not.toHaveBeenCalled();
+    });
+
+    it('成功时把验证码缓存为待确认邮箱，并发送含验证码的邮件（不再有链接）', async () => {
       /** 被测服务与替身 */
       const { service, repository, redis, email } = serviceOf();
       repository.findOne.mockResolvedValue({
@@ -741,18 +782,27 @@ describe('UserService', () => {
         status: true,
         email: 'old@b.com',
       });
-      redis.addCode.mockResolvedValue({ code: 'CODE123' });
-      expect(await service.email(1, ' New@B.com ')).toBe(1);
-      // 激活码缓存 30 分钟，携带用户ID与目标邮箱
-      expect(redis.addCode).toHaveBeenCalledWith('activate', 100, 30, {
-        id: 1,
-        email: 'new@b.com',
-      });
+      /** 响应报文 */
+      const result = await service.sendEmailCode(1, ' New@B.com ');
+      expect(result.msg).toContain('new@b.com');
+      // 缓存按用户维度：一个账号同时只有一个待确认邮箱
+      /** 缓存写入值 */
+      const value = redis.hmset.mock.calls[0][1] as Record<string, unknown>;
+      expect(redis.hmset.mock.calls[0][0]).toBe('email:1');
+      expect(value.email).toBe('new@b.com');
+      expect(value.fails).toBe(0);
+      expect(String(value.captcha)).toMatch(/^\d{6}$/);
+      // 业务有效期外还要留缓冲
+      expect(redis.pexpireat).toHaveBeenCalledWith(
+        'email:1',
+        Number(value.expired) + 30000,
+      );
       /** 邮件内容 */
       const mail = email.send.mock.calls[0][0] as { to: string; html: string };
       expect(mail.to).toBe('new@b.com');
-      expect(mail.html).toContain('http://web/passport/activate/CODE123');
-      delete process.env.WEB_URL;
+      expect(mail.html).toContain(String(value.captcha));
+      // 验证码流程不带链接，避免又退回「点链接激活」
+      expect(mail.html).not.toContain('http');
     });
 
     it('同一 IP 超过每分钟上限时 429', async () => {
@@ -762,69 +812,130 @@ describe('UserService', () => {
       redis.ttl.mockResolvedValue(20);
       /** 捕获的异常 */
       const error = await service
-        .email(1, 'a@b.com', '1.2.3.4')
+        .sendEmailCode(1, 'a@b.com', '1.2.3.4')
         .catch((err: unknown) => err);
       expect(error).toBeInstanceOf(RetryAfterException);
       expect(redis.incr).toHaveBeenCalledWith('limit:ip:email:1.2.3.4');
     });
   });
 
-  describe('activate', () => {
-    it('激活码不存在或已过期时 404', async () => {
+  describe('confirmEmail', () => {
+    it('验证码缓存不存在或已过期时 400，过期还要顺手删键', async () => {
       /** 被测服务与替身 */
-      const { service } = serviceOf();
-      await expect(service.activate('CODE')).rejects.toThrow(
-        '激活地址已过期！',
+      const { service, redis } = serviceOf();
+      /** 入参 */
+      const value = { email: 'a@b.com', code: '123456' };
+      await expect(service.confirmEmail(1, value)).rejects.toThrow(
+        '验证码已失效或已过期，请重新获取！',
       );
+
+      redis.hgetall.mockResolvedValue({
+        email: 'a@b.com',
+        captcha: '123456',
+        expired: String(Date.now() - 1000),
+      });
+      await expect(service.confirmEmail(1, value)).rejects.toBeInstanceOf(
+        BadRequestException,
+      );
+      expect(redis.del).toHaveBeenCalledWith('email:1');
     });
 
-    it('用户不存在时 404，被禁用时 401', async () => {
+    it('邮箱与待确认邮箱不一致时 400（换过邮箱就得重新取验证码）', async () => {
+      /** 被测服务与替身 */
+      const { service, redis } = serviceOf();
+      redis.hgetall.mockResolvedValue({
+        email: 'old@b.com',
+        captcha: '123456',
+        expired: String(Date.now() + 60000),
+      });
+      await expect(
+        service.confirmEmail(1, { email: 'new@b.com', code: '123456' }),
+      ).rejects.toThrow('验证码与该邮箱不匹配，请重新获取验证码！');
+    });
+
+    it('验证码错误累计次数，超过上限直接销毁验证码（410）', async () => {
+      /** 被测服务与替身 */
+      const { service, redis } = serviceOf();
+      redis.hgetall.mockResolvedValue({
+        email: 'a@b.com',
+        captcha: '123456',
+        expired: String(Date.now() + 60000),
+      });
+      redis.hincrby.mockResolvedValue(1);
+      await expect(
+        service.confirmEmail(1, { email: 'a@b.com', code: '000000' }),
+      ).rejects.toThrow('验证码不正确！');
+
+      redis.hincrby.mockResolvedValue(EMAIL_CHANGE_FAIL_MAX);
+      await expect(
+        service.confirmEmail(1, { email: 'a@b.com', code: '000000' }),
+      ).rejects.toThrow('验证码错误次数过多，请重新获取验证码！');
+      expect(redis.del).toHaveBeenCalledWith('email:1');
+    });
+
+    it('用户不存在时 404，被禁用时 403', async () => {
       /** 被测服务与替身 */
       const { service, redis, repository } = serviceOf();
-      redis.hgetall.mockResolvedValue({ id: '1', email: 'a@b.com' });
-      await expect(service.activate('CODE')).rejects.toBeInstanceOf(
-        NotFoundException,
-      );
-
-      repository.findOne.mockResolvedValue({
-        id: 1,
-        email: null,
-        status: false,
-        roles: [],
+      redis.hgetall.mockResolvedValue({
+        email: 'a@b.com',
+        captcha: '123456',
+        expired: String(Date.now() + 60000),
       });
-      await expect(service.activate('CODE')).rejects.toBeInstanceOf(
-        UnauthorizedException,
-      );
+      await expect(
+        service.confirmEmail(1, { email: 'a@b.com', code: '123456' }),
+      ).rejects.toBeInstanceOf(NotFoundException);
+
+      repository.findOne.mockResolvedValue({ id: 1, email: null, status: false });
+      await expect(
+        service.confirmEmail(1, { email: 'a@b.com', code: '123456' }),
+      ).rejects.toBeInstanceOf(ForbiddenException);
     });
 
     it('目标邮箱已被他人占用时 409', async () => {
       /** 被测服务与替身 */
       const { service, redis, repository } = serviceOf();
-      redis.hgetall.mockResolvedValue({ id: '1', email: 'a@b.com' });
-      repository.findOne.mockResolvedValue({
-        id: 1,
-        email: null,
-        status: true,
-        roles: [],
+      redis.hgetall.mockResolvedValue({
+        email: 'a@b.com',
+        captcha: '123456',
+        expired: String(Date.now() + 60000),
       });
+      repository.findOne.mockResolvedValue({ id: 1, email: null, status: true });
       repository.existsBy.mockResolvedValue(true);
-      await expect(service.activate('CODE')).rejects.toBeInstanceOf(
-        ConflictException,
-      );
+      await expect(
+        service.confirmEmail(1, { email: 'a@b.com', code: '123456' }),
+      ).rejects.toBeInstanceOf(ConflictException);
     });
 
-    it('成功时写入新邮箱、删除激活码并返回提示', async () => {
+    it('影响行数为 0 时 422（并发下用户被删等情况）', async () => {
       /** 被测服务与替身 */
       const { service, redis, repository } = serviceOf();
-      redis.hgetall.mockResolvedValue({ id: '1', email: 'a@b.com' });
-      repository.findOne.mockResolvedValue({
-        id: 1,
-        email: null,
-        status: true,
-        roles: [],
+      redis.hgetall.mockResolvedValue({
+        email: 'a@b.com',
+        captcha: '123456',
+        expired: String(Date.now() + 60000),
       });
+      repository.findOne.mockResolvedValue({ id: 1, email: null, status: true });
+      repository.update.mockResolvedValue({ affected: 0 });
+      await expect(
+        service.confirmEmail(1, { email: 'a@b.com', code: '123456' }),
+      ).rejects.toThrow('邮箱修改失败！');
+    });
+
+    it('成功时写入新邮箱、删除验证码并返回提示', async () => {
+      /** 被测服务与替身 */
+      const { service, redis, repository, operate } = serviceOf();
+      redis.hgetall.mockResolvedValue({
+        email: 'a@b.com',
+        captcha: '123456',
+        expired: String(Date.now() + 60000),
+      });
+      repository.findOne.mockResolvedValue({ id: 1, email: null, status: true });
       /** 响应报文 */
-      const result = await service.activate('CODE', 88);
+      const result = await service.confirmEmail(
+        1,
+        { email: ' A@B.com ', code: ' 123456 ' },
+        88,
+      );
       expect(result.msg).toContain('a@b.com');
       /** 更新数据 */
       const value = repository.update.mock.calls[0][1] as Record<
@@ -832,7 +943,8 @@ describe('UserService', () => {
         unknown
       >;
       expect(value.email).toBe('a@b.com');
-      expect(redis.del).toHaveBeenCalledWith('activate:CODE');
+      expect(operate.create).toHaveBeenCalledWith('user', 'email', 1);
+      expect(redis.del).toHaveBeenCalledWith('email:1');
     });
   });
 

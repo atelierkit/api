@@ -19,7 +19,8 @@ function controllerOf() {
     setValid: vi.fn(async (_id: number, _valid: number, _reqId: number) => 30),
     update: vi.fn(async (..._args: unknown[]) => 1),
     password: vi.fn(async (..._args: unknown[]) => ({ code: 0 })),
-    email: vi.fn(async (..._args: unknown[]) => 1),
+    sendEmailCode: vi.fn(async (..._args: unknown[]) => ({ code: 0 })),
+    confirmEmail: vi.fn(async (..._args: unknown[]) => ({ code: 0 })),
   };
   /** 令牌服务替身 */
   const tokenSrv = {
@@ -110,8 +111,16 @@ describe('UserController', () => {
       88,
     );
 
-    await controller.email('a@b.com', 7, '1.2.3.4');
-    expect(userSrv.email).toHaveBeenCalledWith(7, 'a@b.com', '1.2.3.4');
+    // 换邮箱是两步：先发验证码到新邮箱，再带验证码确认；用户ID一律来自令牌
+    await controller.email({ email: 'a@b.com' }, 7, '1.2.3.4');
+    expect(userSrv.sendEmailCode).toHaveBeenCalledWith(7, 'a@b.com', '1.2.3.4');
+
+    await controller.confirmEmail({ email: 'a@b.com', code: '123456' }, 7, 88);
+    expect(userSrv.confirmEmail).toHaveBeenCalledWith(
+      7,
+      { email: 'a@b.com', code: '123456' },
+      88,
+    );
   });
 
   it('logout 作废当前令牌', async () => {

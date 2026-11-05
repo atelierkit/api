@@ -1,5 +1,4 @@
 // 外部依赖
-import { BadRequestException } from '@nestjs/common';
 import { describe, expect, it, vi } from 'vitest';
 // 内部依赖
 import { SettingService } from '../setting/setting.service.js';
@@ -20,7 +19,6 @@ function controllerOf() {
     sendResetCode: vi.fn(async (_email: string, _ip: string) => ({ code: 0 })),
     reset: vi.fn(async (..._args: unknown[]) => ({ code: 0 })),
     register: vi.fn(async (..._args: unknown[]) => 1),
-    activate: vi.fn(async (..._args: unknown[]) => ({ code: 0 })),
   };
   /** 初始化服务替身 */
   const setupSrv = {
@@ -126,16 +124,5 @@ describe('PassportController', () => {
       88,
       '1.2.3.4',
     );
-  });
-
-  it('activate 缺激活码时 400，不查缓存', async () => {
-    /** 被测控制器与替身 */
-    const { controller, userSrv } = controllerOf();
-    // 注：该分支是同步抛错（没走 async），所以用 toThrow 而不是 rejects
-    expect(() => controller.activate('', 0)).toThrow(BadRequestException);
-    expect(userSrv.activate).not.toHaveBeenCalled();
-
-    await controller.activate('CODE', 88);
-    expect(userSrv.activate).toHaveBeenCalledWith('CODE', 88);
   });
 });

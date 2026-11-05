@@ -472,7 +472,6 @@ data:
   PORT: '3000'
   TZ: Asia/Shanghai
   ALLOW_SIGNUP: 'false'
-  WEB_URL: https://www.example.com/
 ```
 
 #### 5.2 Deployment（api）
@@ -678,12 +677,11 @@ kubectl -n atelierkit exec deploy/api -- wget -qO- http://127.0.0.1:3000/passpor
 
 #### 6.6 前端地址
 
-| 变量 | 必填 | 默认 | 说明 |
-| --- | --- | --- | --- |
-| `WEB_URL` | 找回密码 / 邮箱激活需要 | `.env.example` 里是 `http://localhost:4200/` | 邮件里链接的前缀。代码是直接拼接（`WEB_URL + passport/activate/...`），**末尾必须带 `/`**，否则链接会拼成 `...4200passport/...` |
+**2026-11-05 起本仓库不再读 `WEB_URL`。** 更换邮箱改为「验证码两步」（`POST /user/email` 发 6 位验证码 → `POST /user/email/confirm` 校验并落库），
+找回密码本来就是邮件里给验证码、不回填链接，因此邮件正文里已不存在任何前端链接，`.env` 里的 `WEB_URL` 既不生效也不会报错，
+升级时可以随手删掉（`.env.example` 已移除该键）。
 
-前端侧没有「运行时环境变量」：后端地址由 web 的 `assets/config.json` 提供，与本节的 `WEB_URL` 是两套东西，
-改 `WEB_URL` 不会改变前端请求哪个后端。
+前端侧没有「运行时环境变量」：后端地址由 web 的 `assets/config.json` 提供，与本节的 `WEB_URL` 是两套东西。
 
 #### 6.7 上传目录（头像）
 

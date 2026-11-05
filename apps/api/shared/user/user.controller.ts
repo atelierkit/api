@@ -14,7 +14,13 @@ import { RedisService } from '../redis/redis.service.js';
 import { ClientIp, ReqId } from '../req/req.decorator.js';
 import { TokenService } from '../token/token.service.js';
 import { UserId } from './user.decorator.js';
-import { TokenValidDto, PasswordDto, UserUpdateDto } from './user.dto.js';
+import {
+  TokenValidDto,
+  PasswordDto,
+  UserUpdateDto,
+  EmailCodeDto,
+  EmailConfirmDto,
+} from './user.dto.js';
 import { UserService } from './user.service.js';
 import type { AppRequest } from '../common/request.types.js';
 
@@ -159,20 +165,41 @@ export class UserController {
   }
 
   /**
-   * 修改绑定邮箱
+   * 发送更换邮箱验证码
    *
-   * @param email 邮箱地址
+   * 注：验证码发到**新邮箱**，本接口不会立刻改绑 —— 只证明该地址能收信
+   *
+   * @param body 新邮箱
    * @param userId 用户ID
    * @param ip 客户端IP
-   * @returns 用户ID
+   * @returns 响应报文
    */
   @Post('email')
   email(
-    @Body('email') email: string,
+    @Body() body: EmailCodeDto,
     @UserId() userId: number,
     @ClientIp() ip: string,
   ) {
-    return this.userSrv.email(userId, email, ip);
+    return this.userSrv.sendEmailCode(userId, body.email, ip);
+  }
+
+  /**
+   * 确认更换邮箱
+   *
+   * 注：校验验证码通过后才落库，此前原邮箱一直有效
+   *
+   * @param body 新邮箱与验证码
+   * @param userId 用户ID
+   * @param reqId 请求ID
+   * @returns 响应报文
+   */
+  @Post('email/confirm')
+  confirmEmail(
+    @Body() body: EmailConfirmDto,
+    @UserId() userId: number,
+    @ReqId() reqId: number,
+  ) {
+    return this.userSrv.confirmEmail(userId, body, reqId);
   }
 
   /**

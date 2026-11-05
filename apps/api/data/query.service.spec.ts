@@ -12,6 +12,51 @@ function mockRepo<T>(overrides: Partial<Record<keyof Repository<T>, unknown>> = 
 }
 
 describe('DataQueryService', () => {
+  /**
+   * 构造 K 线取数用的 query builder 替身
+   *
+   * 计数走 `getCount()`、取行走 `getMany()`，两条路径共用同一个 where 表达式，
+   * 所以替身必须同时提供两者，且 `counted` 独立返回。
+   */
+  function mockBarQb(total: number, rows: unknown[] = []) {
+    const qb = {
+      where: vi.fn(() => qb),
+      orderBy: vi.fn(() => qb),
+      limit: vi.fn(() => qb),
+      getCount: vi.fn(async () => total),
+      getMany: vi.fn(async () => rows),
+    };
+    return qb;
+  }
+
+  it('bars 计数与取数使用同一份 where 与字符串参数（不把区间对象当参数绑定）', async () => {
+    // 回归：曾用 `count({ where: { date: { $gte, $lte } } })` —— TypeORM 1.x 不认
+    // mongo 风格操作符，把对象整体绑定成 `date = $n`，PG 报 22007 日期语法错误
+    const counted = mockBarQb(100);
+    const fetched = mockBarQb(100);
+    const builders = [counted, fetched];
+    let index = 0;
+    const barRepo = mockRepo({
+      createQueryBuilder: vi.fn(() => builders[index++]),
+    });
+
+    const svc = new DataQueryService(mockRepo(), mockRepo(), barRepo);
+    await svc.bars({ code: 'sh.600000', from: '2025-11-05', to: '2026-11-05' });
+
+    expect(counted.getCount).toHaveBeenCalledTimes(1);
+    expect(counted.where).toHaveBeenCalledWith(
+      'b.code = :code AND b.date >= :from AND b.date <= :to',
+      { code: 'sh.600000', from: '2025-11-05', to: '2026-11-05' },
+    );
+    // 计数与取数的 where 表达式/参数完全相同，避免 total 与 rows 口径漂移
+    expect(fetched.where.mock.calls[0]).toEqual(counted.where.mock.calls[0]);
+    // 所有绑定参数必须是标量（对象会被驱动序列化成 JSON 再塞给 date 列）
+    const [, params] = counted.where.mock.calls[0] as [string, Record<string, unknown>];
+    for (const value of Object.values(params)) {
+      expect(typeof value).toBe('string');
+    }
+  });
+
   it('calendar 只返回存在的行（不补空行，三态依赖此）', async () => {
     const rows = [
       { calendarDate: '2026-01-02', isOpen: true },
@@ -42,16 +87,8 @@ describe('DataQueryService', () => {
   });
 
   it('bars 超过 5000 根时 truncated=true 且只取最近 5000 根', async () => {
-    const qb = {
-      where: vi.fn(() => qb),
-      orderBy: vi.fn(() => qb),
-      limit: vi.fn(() => qb),
-      getMany: vi.fn(async () => []),
-    };
-    const barRepo = mockRepo({
-      count: vi.fn(async () => 6000),
-      createQueryBuilder: vi.fn(() => qb),
-    });
+    const qb = mockBarQb(6000);
+    const barRepo = mockRepo({ createQueryBuilder: vi.fn(() => qb) });
 
     const svc = new DataQueryService(mockRepo(), mockRepo(), barRepo);
 
@@ -64,16 +101,8 @@ describe('DataQueryService', () => {
   });
 
   it('bars 未超上限时 truncated=false 且按日期升序', async () => {
-    const qb = {
-      where: vi.fn(() => qb),
-      orderBy: vi.fn(() => qb),
-      limit: vi.fn(() => qb),
-      getMany: vi.fn(async () => []),
-    };
-    const barRepo = mockRepo({
-      count: vi.fn(async () => 100),
-      createQueryBuilder: vi.fn(() => qb),
-    });
+    const qb = mockBarQb(100);
+    const barRepo = mockRepo({ createQueryBuilder: vi.fn(() => qb) });
 
     const svc = new DataQueryService(mockRepo(), mockRepo(), barRepo);
 

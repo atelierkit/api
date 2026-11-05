@@ -155,22 +155,20 @@ export class DataQueryService {
       throw new BadRequestException('起始日期不能晚于结束日期。');
     }
 
-    const total = await this.barRepo.count({
-      where: {
-        code: query.code,
-        date: { $gte: query.from, $lte: query.to } as never,
-      },
-    });
+    // 计数与取数共用同一份条件表达式：两边条件一旦漂移，total 与 rows 就会对不上
+    const where = 'b.code = :code AND b.date >= :from AND b.date <= :to';
+    const params = { code: query.code, from: query.from, to: query.to };
+
+    // ⚠ 不用 find-options 传区间（`{ date: { $gte, $lte } }`）：TypeORM 只认 FindOperator，
+    // 不认 mongo 风格的 $gte/$lte 键，会把整个对象当单个值绑定成 `date = $n`，
+    // PG 于是抛 22007 invalid input syntax for type date
+    const total = await this.barRepo.createQueryBuilder('b').where(where, params).getCount();
 
     // 超过上限只取最近 5000 根（按日期倒序取 5000 再正序返回）
     const truncated = total > BAR_ROW_LIMIT;
     const qb = this.barRepo
       .createQueryBuilder('b')
-      .where('b.code = :code AND b.date >= :from AND b.date <= :to', {
-        code: query.code,
-        from: query.from,
-        to: query.to,
-      })
+      .where(where, params)
       .orderBy('b.date', truncated ? 'DESC' : 'ASC');
 
     if (truncated) {

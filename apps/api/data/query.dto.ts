@@ -66,9 +66,12 @@ export class BarQueryDto {
 
   /** 起始日期（YYYY-MM-DD） */
   @IsNotEmpty({ message: '起始日期不能为空' })
+  // 日期字符串会直接作为 date 参数下发，格式不合法只会在 PG 侧抛 22007（落成 500），故前置拦截
+  @Matches(/^\d{4}-\d{2}-\d{2}$/, { message: '起始日期格式必须为 YYYY-MM-DD' })
   from!: string;
 
   /** 结束日期（YYYY-MM-DD） */
   @IsNotEmpty({ message: '结束日期不能为空' })
+  @Matches(/^\d{4}-\d{2}-\d{2}$/, { message: '结束日期格式必须为 YYYY-MM-DD' })
   to!: string;
 }

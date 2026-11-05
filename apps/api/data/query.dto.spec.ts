@@ -53,4 +53,28 @@ describe('查询 DTO', () => {
     const missing = Object.assign(new BarQueryDto(), { code: 'sh.600000' });
     expect((await validate(missing)).length).toBeGreaterThan(0);
   });
+
+  it('K 线查询：from/to 必须是 YYYY-MM-DD（否则会在 PG 侧 22007）', async () => {
+    const badFrom = Object.assign(new BarQueryDto(), {
+      code: 'sh.600000',
+      from: '2026/01/01',
+      to: '2026-01-31',
+    });
+    expect((await validate(badFrom)).length).toBeGreaterThan(0);
+
+    const badTo = Object.assign(new BarQueryDto(), {
+      code: 'sh.600000',
+      from: '2026-01-01',
+      to: '20260131',
+    });
+    expect((await validate(badTo)).length).toBeGreaterThan(0);
+
+    // 合法的边界值（含闰日）不受影响
+    const leap = Object.assign(new BarQueryDto(), {
+      code: 'sh.600000',
+      from: '2024-02-29',
+      to: '2024-02-29',
+    });
+    expect(await validate(leap)).toHaveLength(0);
+  });
 });

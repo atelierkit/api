@@ -1,7 +1,7 @@
 # 行情数据表 DDL（atelierkit/api 的 public schema）
 
-> 来源：照 almanac 桌面端 `SchemaInitializer.cs` 的权威 schema 建表（**不沿用旧 api 的 `ks/days/stocks` 表名**）。
-> 本文件由迁移方案产出，**由用户在库上手工执行**（遵守「不直接改库」纪律）。
+> 说明：行情表统一落 `public`，表结构与 `data/entities/*.entity.ts` 严格对应（实体与 DDL 两侧的列名都有单测断言）。
+> **由用户在库上手工执行**（遵守「不直接改库」纪律）。
 >
 > ⚠️ TypeORM `synchronize` 生成不了「部分唯一索引」，因此最后两条（`IDX_sync_runs_plan` / `IDX_sync_runs_active`）
 > **必须手工执行**；开发库若开了 synchronize，它会建表但不会建这两条索引，联调时「重复入队没被挡住」就是这个原因。
@@ -132,14 +132,15 @@ CREATE UNIQUE INDEX IF NOT EXISTS "IDX_sync_runs_active"
 ```
 
 > 注意：`IDX_sync_runs_active` 的谓词里活跃状态集合 `IN (1, 2)` 需与代码里的 `SyncStates.active`
-> 保持一致。本方案状态值沿用 almanac：`1 Queued / 2 Running` 为活跃态。
+> 保持一致：`1 Queued / 2 Running` 为活跃态。
 
-## 四、存量库升级（已有 `sync_runs` 表的库必须执行）
+## 四、已建过表的库补列
+
+上面的建表语句是 `IF NOT EXISTS`，对已存在的表不会补列。旧库按需执行：
 
 ```sql
--- 2026-11-03：卡片「最后更新」要随进度实时变化。
--- 执行中 finished_at 为空，只靠 `finished_at ?? started_at` 会永远停在开始时刻，
--- 因此单独记一列进度打点时刻，由每批进度的 UPDATE 写入 now()。
+-- 进度打点时刻：执行中 finished_at 为空，只靠 `finished_at ?? started_at` 会停在开始时刻，
+-- 故单独记一列，由每批进度的 UPDATE 写入
 ALTER TABLE sync_runs ADD COLUMN IF NOT EXISTS progress_at timestamptz NULL;
 ```
 

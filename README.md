@@ -11,13 +11,18 @@
 本仓库承载两类后端进程：
 
 - **`apps/api`** —— HTTP 接口服务，承载数据存取、统一鉴权，为前端提供 REST API。
-- **`apps/worker`** —— 后台常驻服务，不监听端口，用于定时任务、队列消费、长时异步任务（如下载引擎管理）。
+- **`apps/worker`** —— 后台常驻服务，不监听端口，用于定时任务、队列消费、长时异步任务。
 - **`apps/api/shared`** —— API 服务的共用领域模块（用户 / 角色 / 令牌 / 配置 / 操作日志 / 请求日志 / 缓存 / 队列 / 邮件 / 异常监控），以 `SharedModule` 对外提供。
 - **`apps/api/auth`** —— 访问控制模块（`AuthModule`），只放**管理端**接口：角色（`/auth/role`）、用户（`/auth/user`）、令牌（`/auth/token`），
   统一由 `@Allow('admin')` 声明所需角色，鉴权本身由全局 `TokenGuard` 完成。
-- **`apps/api/cloud`** —— 云服务模块（`CloudModule`），管理端接口：密钥（`/cloud/key`）、KONG 网关站点（`/cloud/kong`，含 `report/:id` 与 `plugin/:id` 两个探测接口）。
-  密钥的 `secret` 只在服务端内部使用，清单与详情都不下发浏览器。
-- **`apps/api/admin`** —— 管理员模块（`AdminModule`），管理端自用的三块：系统配置（`/admin/setting`）、
+- **`apps/api/cloud`** —— 云服务模块（`CloudModule`），管理端接口：密钥（`/cloud/key`），以及四类站点 ——
+  KONG 网关（`/cloud/kong`）、Docker 宿主机（`/cloud/docker`）、Kubernetes 集群（`/cloud/kubernetes`）、
+  远程连接（`/cloud/remote`，终端走 WebSocket 命名空间 `/remote`）。站点连接配置与变更日志落库，站点下的远端资源不落库。
+  密钥的 `secret` 只在服务端内部使用，清单与详情都不下发浏览器；各类站点的凭据（私钥 / Token / 口令）同样加密落库、不回传。
+- **`apps/api/tencent`** —— 腾讯云模块（`TencentModule`），管理端接口：SSL 证书（`/tencent/ssl`）、DNSPod 解析（`/tencent/dns`）、
+  域名（`/tencent/domain`）、CDN（`/tencent/cdn`）、防火墙（`/tencent/firewall`）、轻量服务器（`/tencent/lighthouse`），
+  统一 `@Allow('admin')`；访问密钥取自 `cloud/key`，SSL 证书可直接部署到 KONG 站点。
+- **`apps/api/admin`** —— 管理员模块（`AdminModule`），管理端自用的四块：系统配置（`/admin/setting`）、邮件配置（`/admin/email`）、
   操作日志（`/admin/operate`）、请求日志（`/admin/req`），统一 `@Allow('admin')`。两个日志接口只读。
 - **`apps/api/data`** —— 行情数据模块（`DataModule`），本地 A 股行情（证券 / 交易日历 / 日 K / 复权因子）的同步与浏览：
   写操作（`/data/sync/start`、`/data/sync/pause`）要求 `admin`；快照（`/data/sync/snapshot`）与三个只读查询
@@ -36,14 +41,14 @@
 
 ## 功能
 
-- 私有文件与数据管理：文件上传、下载、预览、分享，以及结构化数据的存取
-- 服务器运维：系统状态、进程与服务管理
-- 下载中心：网盘分享链接解析、断点续传、后台常驻下载，任务进度 / 暂停 / 限速管理
-- 用户与权限：登录、角色、令牌与操作审计
-- 云服务：云厂商访问密钥管理（腾讯云 / 阿里云 / 亚马逊）、KONG 网关站点管理与连通性诊断
+- 用户与权限：用户名密码登录、首次部署初始化、角色 / 令牌管理与操作审计（多设备会话，每台设备一个令牌）
+- 行情数据：A 股证券 / 交易日历 / 日 K / 复权因子的同步（baostock 数据源）与浏览，含实时进度推送与每日定时补更
+- 云服务：云厂商访问密钥管理（腾讯云 / 阿里云 / 亚马逊），KONG 网关站点与站点对象管理，
+  Docker 宿主机管理（容器 / 镜像 / 数据卷 / 网络 + 实时日志），Kubernetes 集群管理（命名空间 / 节点 / Pod / 工作负载 / Service），
+  远程连接（浏览器内 SSH 终端、主机指纹校验、网络与磁盘概览）
 - 腾讯云：SSL 证书（申请 / 续期 / 部署到 KONG / 吊销）、DNSPod 域名与解析记录、CDN 域名、
   轻量应用服务器（启停 / 重启 / 重置密码 / 删除）与防火墙规则
-- （规划中）家庭物联网：设备接入与状态管理
+- 管理员：系统配置（应用 / 备案 / 邮件）与操作 / 请求日志查询
 
 ## 技术栈
 
@@ -107,9 +112,7 @@ yarn build:worker   # → dist/apps/worker/main.js（需要定时任务 / 队列
 
 #### 1.3 建表（生产首次部署必做）
 
-`NODE_ENV=production` 下 TypeORM 不做任何表结构同步，空库直接启动会因缺表报错。按场景二选一：
-
-**A. 全新空库** —— 借 `demo` 让 `synchronize` 建一次，再切回生产：
+`NODE_ENV=production` 下 TypeORM 不做任何表结构同步，空库直接启动会因缺表报错。用 `demo` 借 `synchronize` 建一次：
 
 ```bash
 # ① 以 demo 起一次，建出全部实体表（含行情表），看到
@@ -122,8 +125,8 @@ NODE_ENV=demo node dist/apps/api/main.js
 NODE_ENV=production node dist/apps/api/main.js
 ```
 
-**B. 从旧私有库升级** —— 执行 `docs/auth-username-password-design.md` 4.1 节的迁移 SQL。
-⚠️ 那段是 `ALTER TABLE`（假设表已存在），**不是**从零建表脚本：空库执行会直接报 `relation "users" does not exist`。
+已有数据、需要单独给 `users` 补登录列时，用 `docs/auth-and-initialization.md` 第 2 节的 `ALTER TABLE`。
+⚠️ 那段假设表已存在，**不是**从零建表脚本：空库执行会直接报 `relation "users" does not exist`。
 且顺序不能打乱（先加列 → 回填占位用户名 → 最后建唯一索引），否则唯一索引在第一行之后就冲突。
 
 **行情表的附加 DDL**：`apps/api/data/entities/schema.ddl.sql` 是**带说明的 Markdown**（正文里只有三段 SQL 代码块），
@@ -674,21 +677,20 @@ kubectl -n atelierkit exec deploy/api -- wget -qO- http://127.0.0.1:80/passport/
 
 #### 6.5 邮件（无环境变量）
 
-邮件配置**没有任何环境变量入口**：2026-11-01 起改在「系统设置 → 邮件配置」里维护并落库
+邮件配置**没有任何环境变量入口**：在「系统设置 → 邮件配置」里维护并落库
 （`settings.code='email'`，授权码用 `SETTING_KEY` 加密后存储），运行时**完全不读**
 `SMTP_HOST` / `SMTP_PORT` / `SMTP_ACCOUNT` / `SMTP_PASSWORD` / `SMTP_USER`。
 
-`.env` 与 `.env.example` 里的 SMTP 段已于 2026-11-02 删除。从旧版本升级的部署若 `.env` 里还留着这五个键，
-既不会生效也不会报错：管理页只会提示一次（接口返回 `envDetected`，探测函数见 `shared/email/email.config.ts` 的 `hasEnvSmtp`），
-确认新配置可用后自行删掉即可。邮件功能唯一必填的环境变量是 `SETTING_KEY`，见 §6.4。
+`.env` 与 `.env.example` 都不含 SMTP 段。若某个部署的 `.env` 里仍留着以上五个键，既不会生效也不会报错，
+管理页会提示一次（接口返回 `envDetected`，探测函数见 `shared/email/email.config.ts` 的 `hasEnvSmtp`），确认库里的配置可用后删掉即可。
+邮件功能唯一必填的环境变量是 `SETTING_KEY`，见 §6.4。
 
 #### 6.6 前端地址
 
-**2026-11-05 起本仓库不再读 `WEB_URL`。** 更换邮箱改为「验证码两步」（`POST /user/email` 发 6 位验证码 → `POST /user/email/confirm` 校验并落库），
-找回密码本来就是邮件里给验证码、不回填链接，因此邮件正文里已不存在任何前端链接，`.env` 里的 `WEB_URL` 既不生效也不会报错，
-升级时可以随手删掉（`.env.example` 已移除该键）。
+**本服务没有「前端地址」配置项。** 更换邮箱走「验证码两步」（`POST /user/email` 发 6 位验证码 → `POST /user/email/confirm` 校验并落库），
+找回密码同样是邮件里给验证码，因此邮件正文不存在任何链接，不需要后端知道前端部署在哪个地址。
 
-前端侧没有「运行时环境变量」：后端地址由 web 的 `assets/config.json` 提供，与本节的 `WEB_URL` 是两套东西。
+前端侧也没有运行时环境变量：后端地址由 web 的 `assets/config.json` 提供，方向正好相反。
 
 #### 6.7 上传目录（头像）
 
@@ -765,7 +767,7 @@ SETUP_TOKEN=生成的这串
 ### 多设备登录与会话上限
 
 - 同一账号可在多台设备（电脑、手机等）**同时在线**，且**每台设备只保留一个令牌**：在同一设备上重新登录，只作废该设备上一次的令牌。
-- 设备标识由前端生成并持久化在浏览器本地（`localStorage` 的 `atelierkit.device`），登录 / 初始化时随请求体 `deviceId` 上报；缺失或格式非法时归入统一分组 `unreported`，表现为「所有未上报设备共用一个会话」（等价于改造前的单会话语义）。
+- 设备标识由前端生成并持久化在浏览器本地（`localStorage` 的 `atelierkit.device`），登录 / 初始化时随请求体 `deviceId` 上报；缺失或格式非法时归入统一分组 `unreported`，表现为「所有未上报设备共用一个会话」。
 - 清空浏览器数据会换出一个新的设备标识，旧会话按令牌有效期自然回收；长期有效的令牌需在「令牌管理」页手动作废。
 - 单账号最多 20 个并发设备（`TOKEN_DEVICE_MAX`），超出时按令牌创建时间淘汰最旧的会话。
 - 修改密码保留当前设备、作废其它设备的会话；通过邮箱重置密码则作废全部会话。
@@ -791,7 +793,7 @@ yarn reset:setup
 | 所有 `passport` 接口返回 `428` | 系统未初始化，先建管理员（见上） |
 | `POST /passport/setup` 返回 `403` | 缺/错 `X-Setup-Token`，或来源不是内网且未配 `SETUP_TOKEN` |
 | `POST /passport/setup` 返回 `409` | 已经初始化过了；确需重来用 `yarn reset:setup` |
-| `POST /passport/login` 返回 `409` | 该账号尚未设置密码（历史数据），走 `POST /passport/reset` 重置 |
+| `POST /passport/login` 返回 `409` | 该账号尚未设置密码，走 `POST /passport/reset` 重置 |
 
 ## 测试
 
@@ -809,7 +811,8 @@ yarn test:cov
 覆盖率口径写在 `vitest.config.ts` 的 `coverage` 里：统计 `apps/api/**/*.ts`，排除 `*.spec.ts` 与 `test/`
 （不显式圈定 include 时，v8 只统计「被测试加载过的文件」，controllers 与装配层会整个消失，数字会虚高十几个点）。
 
-当前实测约 **91% 行 / 90% 语句 / 85% 分支**，门槛设在 89/88/83/88（行/语句/分支/函数），留 2-3 个点余量防误红。
+当前实测约 **94% 行 / 94% 语句 / 84% 分支 / 93% 函数**，门槛设在 89/88/83/88（行/语句/分支/函数），
+留 1-5 个点余量防误红。
 `apps/api/main.ts`、`app.module.ts` 属于启动装配，要测就得连真实 PG/Redis，未纳入目标。
 
 ### 提交门禁（pre-commit）
@@ -844,8 +847,7 @@ apps/
 libs/                        # 可复用 NestJS 库（nest g library <name>）
 ```
 
-> 目录结构说明：Monorepo 下 `apps/api` 的源码直接位于其根目录（`apps/api/*.ts`），
-> 不再有内层 `src/`；`apps/api/test/` 存放 e2e 测试。
+> 目录结构说明：Monorepo 下 `apps/api` 的源码直接位于其根目录（`apps/api/*.ts`），e2e 测试在 `apps/api/test/`。
 >
 > 路径别名：根 `tsconfig.json` 的 `paths` 声明 `@shared` → `apps/api/shared/index.ts`、`@shared/*` → `apps/api/shared/*`，
 > 于是 `apps/api` 内可写 `import { SharedModule } from '@shared'`；`shared/` 内部仍走相对路径。

@@ -3,8 +3,8 @@
 /**
  * 同步领域常量：目标 / 状态 / 作用域 / 单元标识 / 量纲
  *
- * 数值与语义照 almanac 桌面端（`SyncTarget` / `SyncState` / `CoverageScopes` /
- * `SyncUnitCodes` / `ProgressUnit`）逐一对齐，避免两边对照排查时错位。
+ * 这些取值同时落库（`sync_tasks` / `sync_runs` / `data_coverage`）并出现在前端文案里，
+ * 改动等于改数据契约：既有的库与前端都要一起改。
  */
 
 /** 同步的数据类型 */

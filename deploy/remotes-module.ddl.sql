@@ -1,4 +1,4 @@
--- atelierkit · 远程连接模块（2026-11-03）
+-- atelierkit · 远程连接模块
 --
 -- 执行角色：atelier（必须与其余表的 owner 一致 —— 用 postgres 建表会让应用连读写权限都没有）
 -- 幂等：两表都带 IF NOT EXISTS，重复执行无副作用
@@ -6,8 +6,8 @@
 --         `remotes_logs` **没有** create_* 两列 —— CommonService.addLog 按日志表的列做
 --         INSERT ... SELECT，少一列或多一列都会让写操作后的日志搬运报错。
 -- 说明 2：嵌入列的物理列名带前缀（`update_user_id`、`log_id`），不是实体里的 `_user_id` / `_id`。
--- 说明 3：docker / kubernetes 两个模块的 DDL 目前仍只存在于工控机的
---         `/data/scripts/atelierkit/api/` 下，仓库里没有对应文件 —— 换机器部署时会漏表。
+-- 说明 3：docker / kubernetes 两个模块的 DDL 尚未进仓库（只存在于工控机的
+--         `/data/scripts/atelierkit/api/` 下）—— 换机器部署时会漏表。
 --
 -- 应用方式：
 --   docker exec -i main-postgres psql -U atelier -d atelier -v ON_ERROR_STOP=1 < remotes-module.ddl.sql

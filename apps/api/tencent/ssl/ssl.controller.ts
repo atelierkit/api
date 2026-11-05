@@ -115,9 +115,9 @@ export class SslController {
    * 把腾讯云的证书部署到 KONG 站点
    *
    * 注 1：证书的公私钥由腾讯云接口现取，不经过浏览器 —— 前端只提交证书ID与站点ID
-   * 注 2：旧私有项目把整份证书详情（**含私钥**）打进 debug 日志，这里不再打印
-   * 注 3：旧项目只判 `CertificatePublicKey` 为空就报 400，证书不存在时用户看到的是
-   * 「证书内容或私钥为空」；这里先看 `Response.Error`，把腾讯云的原始错误码透出去
+   * 注 2：`DescribeCertificateDetail` 的返回**含私钥**，只记证书 ID 与站点 ID，不打印详情
+   * 注 3：先看 `Response.Error`，把腾讯云的原始错误码透出去 —— 只判 `CertificatePublicKey` 为空的话，
+   * 证书不存在时用户看到的是「证书内容或私钥为空」
    *
    * @param id 密钥ID
    * @param body 部署参数

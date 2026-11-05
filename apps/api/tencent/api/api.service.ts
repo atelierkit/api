@@ -28,7 +28,7 @@ export class ApiService {
    *
    * 注 1：密钥的 `secret` 不出库（`KeyService.show` 的 select 不含它），故这里分两步取 ——
    * `show` 校验密钥存在与云服务商，`secret(id)` 单独取访问密钥 Secret
-   * 注 2：返回值已剥离外层 `Response`，业务错误（`Response.Error`）原样保留，与旧项目契约一致
+   * 注 2：返回值已剥离外层 `Response`，业务错误（`Response.Error`）原样保留，由前端提示
    *
    * @param id 密钥ID（云服务商ID）
    * @param config 请求参数

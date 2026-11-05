@@ -14,9 +14,8 @@ const MAX_PAGES = 100;
  *
  * 注 1：Kong 各对象（路由 / 服务 / 用户 / 证书 / 插件 / 上游）在 Admin API 上是同一套 REST 形状
  * （`GET|POST /{type}`、`GET|PATCH|DELETE /{type}/{id}`），故一个服务管全部类型，不按类型拆
- * 注 2：与旧私有项目相比有两处刻意不同 —— 分页改用 `offset` 自行拼查询串（旧代码直接拼
- * `data.next`，而新版 Kong 给的 `next` 是完整 URL，拼出来会变成 `http://host:8001http://...`）；
- * 证书的域名与有效期改在后端解析（见 `certificate.util.ts`）
+ * 注 2：两处实现细节值得记住 —— 分页按响应里的 `offset` 自行拼查询串（Kong 的 `next` 是完整 URL，
+ * 直接拼会变成 `http://host:8001http://...`）；证书的域名与有效期在后端解析（见 `certificate.util.ts`）
  */
 @Injectable()
 export class ObjectService {

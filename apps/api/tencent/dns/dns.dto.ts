@@ -56,9 +56,8 @@ export class DnsListDto {
 /**
  * 创建解析记录入参
  *
- * 注 1：字段名与腾讯云 `CreateRecord` **逐字一致**。旧私有项目的 DTO 写的是 `Type` / `Name`
- * （腾讯云里没有这两个参数），配合 `whitelist` 会把前端提交的 `RecordType` / `SubDomain` 剥掉，
- * 建记录必然报 `MissingParameter` —— 这里按官方参数表重写
+ * 注 1：字段名必须与腾讯云 `CreateRecord` **逐字一致**。写成 `Type` / `Name` 之类（腾讯云没有这两个参数）时，
+ * `whitelist` 会把前端提交的 `RecordType` / `SubDomain` 剥掉，建记录必然报 `MissingParameter`
  * 注 2：`RecordLine` 在腾讯云是必填（如「默认」）
  */
 export class DnsCreateDto {

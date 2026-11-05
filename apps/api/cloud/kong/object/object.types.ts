@@ -2,7 +2,7 @@
  * 站点下可管理的 KONG 对象类型
  *
  * 注 1：类型会直接拼进 Admin API 的路径（`/{type}`），因此必须用白名单校验，不能放任前端传任意串
- * 注 2：与旧私有项目 `src/kong/object` 的六种对象一致（路由 / 服务 / 用户 / 证书 / 插件 / 上游）
+ * 注 2：六种对象与 Kong Admin API 的六个顶层集合一一对应（路由 / 服务 / 用户 / 证书 / 插件 / 上游）
  */
 export const KONG_OBJECT_TYPES = [
   'routes',

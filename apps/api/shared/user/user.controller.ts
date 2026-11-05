@@ -74,7 +74,7 @@ export class UserController {
   }
 
   /**
-   * 获取用户导航信息（注：分类与产品已移除，当前只返回快捷方式）
+   * 获取用户导航信息（注：只返回快捷方式）
    *
    * @param userId 用户ID
    * @returns 新令牌

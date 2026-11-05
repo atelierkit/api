@@ -14,10 +14,10 @@ export interface CertificateInfo {
 /**
  * 解析 PEM 证书，取出域名与有效期
  *
- * 注 1：Kong 的证书对象**不带有效期**（`start` / `end` 只能从 PEM 读），旧私有项目是在浏览器里
- * 用 `node-forge` 解析的；本仓库改用 Node 自带的 `X509Certificate`，后端解析后随列表下发，
- * 前端不再引 node-forge（省掉数百 KB 打包体积）。`snis` 在 3.9 的证书对象里是有的，
- * 但老版本没有 ⇒ 这里解析出的域名只作兜底，取值优先级见 `ObjectService.enrich`
+ * 注 1：Kong 的证书对象**不带有效期**（`start` / `end` 只能从 PEM 读），这里用 Node 自带的
+ * `X509Certificate` 在后端解析、随列表下发，前端因此不需要 `node-forge`（省掉数百 KB 打包体积）。
+ * `snis` 在 3.9 的证书对象里是有的，但老版本没有 ⇒ 这里解析出的域名只作兜底，
+ * 取值优先级见 `ObjectService.enrich`
  * 注 2：解析失败返回 `null` 而不是抛错 —— 列表里只要有一张脏证书，也不该让整页打不开
  *
  * @param pem PEM 格式的证书文本
@@ -50,7 +50,7 @@ export function parseCertificate(pem: string): CertificateInfo | null {
  * 取出证书里的 DNS 域名
  *
  * 注：`subjectAltName` 是 `"DNS:a.com, DNS:b.com, IP Address:1.2.3.4"` 这样的字符串，
- * 这里只保留 `DNS:` 项（Kong 的 snis 只接受域名，IP 走 `ips` 字段，不在本次迁移范围）
+ * 这里只保留 `DNS:` 项（Kong 的 snis 只接受域名，IP 走 `ips` 字段）
  *
  * @param cert 证书对象
  * @returns 域名清单，没有 SAN 时为空数组

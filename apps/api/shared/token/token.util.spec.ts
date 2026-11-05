@@ -14,7 +14,7 @@ describe('normalizeDevice', () => {
   });
 
   it('缺失或非法时归入统一分组', () => {
-    // 未上报：与改造前的单会话语义一致，重复登录仍只保留一个令牌
+    // 未上报：该分组内共用一个会话，重复登录仍只保留一个令牌
     expect(normalizeDevice()).toBe(DEVICE_UNKNOWN);
     expect(normalizeDevice('')).toBe(DEVICE_UNKNOWN);
     // 过短、超长、含分隔符与空白的值一律丢弃，不能靠乱填刷出无限个设备分组
@@ -40,7 +40,7 @@ describe('sameDevice', () => {
   });
 
   it('没有设备字段的旧令牌视为可清理', () => {
-    // 改造前的令牌不带 device 字段，无法归属到具体设备
+    // 不带 device 字段的令牌无法归属到具体设备
     expect(sameDevice(undefined, 'dev12345')).toBe(true);
     expect(sameDevice('', 'dev12345')).toBe(true);
   });

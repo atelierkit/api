@@ -1050,7 +1050,7 @@ describe('UserService 多设备登录', () => {
     /** 被测服务 */
     const { service, repository, redis } = serviceOf();
     repository.findOne.mockResolvedValue(loggedUser());
-    // 三条会话：本设备（手机）、另一设备（电脑）、改造前没有设备字段的旧令牌
+    // 三条会话：本设备（手机）、另一设备（电脑）、没有 device 字段的令牌
     redis.scanKeys.mockResolvedValue(['token:1:a', 'token:1:b', 'token:1:c']);
     redis.hgetall.mockImplementation(async (key: string) => {
       if (key === 'token:1:a') {

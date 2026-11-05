@@ -18,8 +18,8 @@ export interface KongRequestInit {
 /**
  * 请求 KONG 的 Admin API
  *
- * 注 1：旧私有项目用 `@nestjs/axios` + `validateStatus` 兜住所有状态码，这里改用运行时自带的
- * `fetch`（Node 18+），不引新依赖，语义一致：非 2xx 不抛网络错，由本函数按状态码转成
+ * 注 1：用运行时自带的 `fetch`（Node 18+），不引 `@nestjs/axios`：
+ * 非 2xx 不抛网络错，由本函数按状态码转成
  * `HttpException` 原样透传给前端，避免网关的 401/404 被吞成 500
  * 注 2：站点与站点下的对象共用本函数，故抽成独立文件而不是某个服务的私有方法
  *

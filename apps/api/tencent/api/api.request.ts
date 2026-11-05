@@ -7,10 +7,10 @@ export const TENCENT_TIMEOUT = 15000;
 /**
  * 请求腾讯云 API
  *
- * 注 1：旧私有项目用 `@nestjs/axios`，本仓库不引 axios，改用运行时自带的 `fetch`（Node 18+），
+ * 注 1：不引 `@nestjs/axios`，请求走运行时自带的 `fetch`（Node 18+），
  * 与 `cloud/kong/kong.request.ts` 同一套做法
  * 注 2：**业务错误不在这里抛** —— 腾讯云出错时同样是 HTTP 200，正文为 `{ Response: { Error } }`，
- * 该正文原样返回给调用方（与旧项目契约一致，前端据 `Error.Message` 提示）
+ * 该正文原样返回给调用方，由前端据 `Error.Message` 提示
  * 注 3：只有「连不上 / 非 2xx」才转成 `HttpException`，避免把网络故障伪装成业务失败
  *
  * @param host 请求域名

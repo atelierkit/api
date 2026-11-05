@@ -25,8 +25,8 @@ export interface TencentError {
 /**
  * 腾讯云响应体
  *
- * 注 1：腾讯云的**业务错误也是 HTTP 200**，错误信息在 `Response.Error` 里 —— 旧私有项目
- * 把它原样下发给前端，由前端判断 `RequestId` / `Error.Message`，这里保持同一契约
+ * 注 1：腾讯云的**业务错误也是 HTTP 200**，错误信息在 `Response.Error` 里 —— 后端原样下发给前端，
+ * 由前端判断 `RequestId` / `Error.Message`，不在后端改判成 HTTP 错误
  * 注 2：各接口的返回字段差异极大（`Certificates` / `RecordList` / `InstanceSet` …），
  * 故只声明公共字段，其余由前端按需取
  */

@@ -44,7 +44,7 @@ const PAGE_SIZE = 500;
  * 证券基础信息同步器（整份快照，逐页提交）
  *
  * ⚠ 退市证券必须写进库（回测按历史时点判定），不做「只保留上市证券」的过滤。
- * 类型/状态/交易所落库为枚举名（与 almanac 一致，可读）。
+ * 类型/状态/交易所落库为枚举名（可读，前端直接映射文案）。
  * ⚠ 必须写台账：这张卡片的「覆盖至 / 记录数」只读台账，不读 securities 表 ——
  *   不写就会永远显示空，即使库里有几千条。
  */
@@ -173,7 +173,7 @@ function statusName(status: number): string {
   }
 }
 
-/** 从代码前缀推断交易所（落库用 almanac 枚举名，不是前缀本身） */
+/** 从代码前缀推断交易所（落库用枚举名，不是前缀本身） */
 function marketOf(code: string): string {
   if (code.startsWith('sh.')) {
     return 'Shanghai';

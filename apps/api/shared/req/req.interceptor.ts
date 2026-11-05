@@ -69,7 +69,7 @@ export class ReqInterceptor implements NestInterceptor {
           this.queueSrv.addTask(() =>
             this.reqSrv.insert({
               ...params,
-              // 注：非 HttpException 的异常没有 status，此前会取到 undefined 并被实体默认值
+              // 注：非 HttpException 的异常没有 status，直接落库会取到 undefined 并被实体默认值
               // 吞成 200（把 500 记成成功），此处兜底为 500
               status: (err as { status?: number })?.status ?? 500,
               endAt: Date.now(),

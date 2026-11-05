@@ -66,8 +66,8 @@ describe('dns.dto', () => {
       expect(dto.RecordLineId).toBe('0');
     });
 
-    it('旧私有项目的字段名（Type / Name）会被 whitelist 静默剥掉 —— 这就是当初建记录报 MissingParameter 的原因', async () => {
-      /** 旧字段名 */
+    it('未声明的字段名（Type / Name）会被 whitelist 静默剥掉，只剩缺字段的错误', async () => {
+      /** 未声明的字段名 */
       const legacy = { Domain: 'example.com', Type: 'A', Name: 'www', Value: '1.2.3.4' };
       /** 实例 */
       const dto = plainToInstance(DnsCreateDto, legacy);

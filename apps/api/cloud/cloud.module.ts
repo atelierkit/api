@@ -38,13 +38,12 @@ import type { SshClientLike } from './remote/remote.ssh.js';
 /**
  * 云服务模块
  *
- * 注：自旧私有 `api` 项目 的 `src/cloud`（密钥）与 `src/kong`（站点）合并迁入，
- * 两者在页面上同属「云服务」一个导航区，故收在同一个模块里；全部接口用 `@Allow('admin')` 声明
- * 所需角色，鉴权由全局 `TokenGuard` 完成。旧项目里按云厂商（tencent / aliyun）分的业务模块不迁移。
- * 2026-11-03 新增 `docker`（宿主机管理），与 KONG 站点同一套「站点 + 站点下资源」的组织方式；
- * 同日新增 `kubernetes`（集群管理），沿用同一套组织方式，凭据改为 Token / 客户端证书
- * 同日新增 `remote`（远程连接），沿用同一套组织方式，且是全仓库第一处 WebSocket 业务网关
- * （数据面走 `/remote` 命名空间，鉴权靠自己校验握手令牌，见 `RemoteGateway`）
+ * 注：访问密钥与四类站点（KONG / Docker / Kubernetes / 远程连接）在页面上同属「云服务」一个导航区，
+ * 故收在同一个模块里；全部接口用 `@Allow('admin')` 声明所需角色，鉴权由全局 `TokenGuard` 完成。
+ * 四类站点是同一套组织方式：站点连接配置与 `_logs` 表落库，站点下的远端资源不落库 ——
+ * KONG 管路由 / 服务 / 用户 / 上游 / 证书 / 插件，Docker 管容器 / 镜像 / 数据卷 / 网络，
+ * Kubernetes 管命名空间 / 节点 / Pod / 工作负载 / Service，远程连接管 SSH 主机。
+ * `remote` 是全仓库第一处 WebSocket 业务网关（数据面走 `/remote` 命名空间，握手令牌自行校验，见 `RemoteGateway`）。
  */
 @Module({
   imports: [

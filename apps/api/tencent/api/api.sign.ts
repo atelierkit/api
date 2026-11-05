@@ -7,7 +7,7 @@ export const ALGORITHM = 'TC3-HMAC-SHA256';
 /** 内容类型，注：签名值与实际发送必须逐字一致（少写 `charset=utf-8` 就会签名不一致） */
 export const CONTENT_TYPE = 'application/json; charset=utf-8';
 
-/** 缺省参与签名的头部，注：与旧私有项目一致，只签 `content-type;host` */
+/** 缺省参与签名的头部，注：只签 `content-type;host`（腾讯云只校验参与签名的头） */
 export const DEFAULT_SIGNED_HEADERS = ['content-type', 'host'];
 
 /** 签名信息 */

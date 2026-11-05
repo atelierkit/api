@@ -791,7 +791,7 @@ export class UserService extends CommonService<UserEntity, UserLogEntity> {
     if (!user.status) {
       throw new ForbiddenException('用户已被禁用！');
     }
-    // 老数据（迁移前只有邮箱、没有密码）引导到重置流程，而不是直接判密码错
+    // 密码为空串的账号（手工导入或早期建号）引导到重置流程，而不是直接判密码错
     if (!user.password) {
       throw new ConflictException('该账号尚未设置密码，请先通过邮箱重置密码！');
     }
@@ -1128,8 +1128,8 @@ export class UserService extends CommonService<UserEntity, UserLogEntity> {
    * 发送更换邮箱验证码
    *
    * 注 1：验证码发到**新邮箱**，本方法不落库 —— 邮箱要等 `confirmEmail` 校验通过才真正改绑，
-   *      这与旧版「发激活链接、点链接才改」是同一个安全前提（能收到新邮箱的信件才算拥有它），只是把
-   *      「跨设备点链接」换成了「当前会话内填验证码」
+   *      安全前提是「能收到新邮箱的信件才算拥有它」；改成验证码只是把验证动作留在当前会话内，
+   *      不再需要跨设备点链接
    * 注 2：频控按**用户**记（60 秒一次），换着目标邮箱刷也绕不过去；另有 IP 级限流挡多账号并发轰炸
    * 注 3：不校验原密码 —— 能拿到登录态即可发起改绑，改绑本身不改密码、也不影响现有会话
    *

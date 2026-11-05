@@ -71,7 +71,7 @@ describe('DnsController', () => {
     );
   });
 
-  it('取单条记录走 DescribeRecord（旧项目错用了 DescribeRecordList）', async () => {
+  it('取单条记录走 DescribeRecord（不是 DescribeRecordList）', async () => {
     /** 被测控制器与替身 */
     const { controller, apiSrv } = controllerOf();
     await controller.record(3, { Domain: 'example.com', RecordId: 8 });

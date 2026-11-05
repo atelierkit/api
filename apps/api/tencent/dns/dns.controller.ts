@@ -17,8 +17,7 @@ import {
  * DNSPod 解析记录控制器
  *
  * 注：取单条记录走 `DescribeRecord`（`Domain` + `RecordId` → `RecordInfo`）。
- * 旧私有项目这里错用了 `DescribeRecordList` —— 它既不按 `RecordId` 过滤、也不返回 `RecordInfo`，
- * 于是编辑弹窗永远只能退回默认表单
+ * `DescribeRecordList` 既不按 `RecordId` 过滤、也不返回 `RecordInfo`，用它取详情只能退回默认表单
  */
 @Controller('tencent/dns')
 @Allow('admin')

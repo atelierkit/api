@@ -7,8 +7,7 @@ import type { ValidationPipeOptions } from '@nestjs/common';
  * ⚠️ **`transform: true` 不是「顺手打开」**：`@Query()` 里的值全是字符串
  * （`?page=1` 到 DTO 里是 `'1'`），而 class-validator 的 `@IsInt()` 只认 number，
  * 于是「前端带 `page` / `size` 的请求恒 400，报 `page must be an integer number`」。
- * 这个缺陷 2026-11-05 在证券清单接口上实测到（证券页一打开就红），本项目的第一个
- * `@Query()` 消费者正好就是它，所以此前没暴露出来。
+ * 所有 `@Query()` 的数值参数都依赖这一条，改回只开 `whitelist` 会让查询类接口整片变红。
  *
  * ⚠️ 刻意**不**开 `enableImplicitConversion`：它按反射类型隐式转换，`Boolean('false')`
  * 得到 `true` —— 所有 `@IsBoolean()` 字段（`status` / `allowInsecure` / `verify` 等）

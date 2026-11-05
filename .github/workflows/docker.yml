@@ -1,7 +1,7 @@
 name: 构建并推送镜像
 
 # 提及：镜像默认推送到 GitHub Container Registry（ghcr.io，用内置 GITHUB_TOKEN，无需额外配置）；
-# 若要像私有项目那样推阿里云私有仓库，追加一个 docker/login-action 与对应的 secrets 即可。
+# 需要推到其它镜像仓库（如阿里云 ACR）时，追加一个 docker/login-action 与对应的 secrets 即可。
 #
 # ⚠️ action 版本约束：GitHub 已于 2026-09-23 从 runner 移除 Node.js 20 运行时，
 #    仍以 node20 为运行时的 action 会被强制改用 node24 并告警（后续直接失败）。

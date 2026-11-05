@@ -10,7 +10,7 @@ import { BarEntity } from './entities/bar.entity.js';
 /** K 线单次查询上限（客户端硬编码常量的服务端表达） */
 const BAR_ROW_LIMIT = 5000;
 
-/** 联想候选条数上限（与桌面端 almanac 的 12 条同口径） */
+/** 联想候选条数上限，注：12 条足够铺满下拉，再多多半是误匹配 */
 const SUGGEST_LIMIT = 12;
 
 /** 证券联想的一个候选 */

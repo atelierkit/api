@@ -32,8 +32,7 @@ export class InstanceDto {
   /**
    * 实例ID
    *
-   * 注：旧私有 DTO 给了空串默认值且只写 `@IsString()`，等于放行空 ID（腾讯云只会回一句
-   * `InvalidParameter`）；这里按必填处理
+   * 注：必须按必填校验 —— 只写 `@IsString()` 会放行空 ID，腾讯云只会回一句 `InvalidParameter`
    */
   @IsString()
   @IsNotEmpty()

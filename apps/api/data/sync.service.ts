@@ -434,12 +434,12 @@ export class SyncService implements OnApplicationBootstrap, OnModuleDestroy {
   /**
    * 分批 upsert，返回累计提交行数
    *
-   * ⚠ 为什么必须分批（2026-11-03 生产事故）：PostgreSQL 的 Bind 消息里参数个数是 Int16，
+   * ⚠ 为什么必须分批：PostgreSQL 的 Bind 消息里参数个数是 Int16，
    *   硬上限 65535；`pg` 驱动的 `addInt16` 超出后**静默截断**，服务端于是按
    *   `参数数 mod 65536` 读格式码，剩下的格式码被当成参数个数 ⇒ 报
    *   「bind message has 33 parameter formats but 0 parameters」，与真实原因完全对不上。
-   *   现场数据：`bars` 每行 17 个绑定参数，2020-06-05 全市场 3857 只 ⇒ 65569 个参数，
-   *   65569 − 65536 = 33 正是报错里的 33；前一天 3855 行 = 65535 恰好在线上，所以此前从没暴露。
+   *   量级参考：`bars` 每行 17 个绑定参数，全市场 3857 只就是 65569 个参数，
+   *   65569 − 65536 = 33 正是报错里的 33。
    *
    * ⚠ 按交易日同步（`BarByDate` / `AdjustFactor`）是「一天一次全市场写入」，上游不会分页，
    *   分批只能落在这一层；`Security` / `Calendar` 上游虽按 500 条分页，这里也一并收编，

@@ -16,7 +16,7 @@ import type { KongObject } from './object.types.js';
  *
  * 注 1：前缀与站点控制器同属 `cloud/kong`，对象类接口收在 `cloud/kong/object/` 下
  * 注 2：全部用 POST + Body —— 对象类型、对象ID 都要随请求走，且 `value` 是任意 JSON，
- * 塞进 URL 或 query 都不合适；这一点与旧私有项目一致，前端也按 POST 调用
+ * 塞进 URL 或 query 都不合适；前端同样按 POST 调用
  * 注 3：控制器只管转发与取 siteId，地址解析（站点不存在 → 404）由 `KongService.url` 负责
  */
 @Controller('cloud/kong/object')

@@ -156,8 +156,8 @@ export function toEmailConfig(setting: EmailSetting, key: string): EmailConfig {
 /**
  * 环境变量里是否还留着 SMTP 参数
  *
- * 注：只用于管理页提示「已迁移到系统设置，可删除 .env 里的 SMTP_*」，
- * 运行时**不再**从环境变量取值（也绝不下发其中的授权码）
+ * 注：只用于管理页提示「邮件配置在系统设置里维护，`SMTP_*` 已不生效，可删除」，
+ * 运行时**不**从环境变量取值（也绝不下发其中的授权码）
  *
  * @returns 存在任一 SMTP 变量时为 true
  */

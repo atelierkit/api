@@ -143,7 +143,7 @@ export class AdminEmailController {
     if (changed) {
       password = encryptSecret(incoming, secretKey());
     } else if (setting) {
-      // 未改动：沿用原值；若历史数据是明文（手工导入），顺手转成密文
+      // 未改动：沿用原值；若库里是明文（手工 SQL 导入），顺手转成密文
       password = isSecret(setting.password)
         ? setting.password
         : encryptSecret(setting.password, secretKey());

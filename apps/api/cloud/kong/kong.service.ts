@@ -70,9 +70,9 @@ export class KongService extends CommonService<KongEntity, KongLogEntity> {
   /**
    * 获取网关概览
    *
-   * 注 1：旧私有项目的仪表板读 `/default/license/report`，那是**企业版专属**接口，
-   * 社区版返回 404 `{"message":"Not found"}`（已在本机 3.9.4 上实测）⇒ 整页永远是空的；
-   * 这里改用社区版也提供的 `/`（版本、插件）与 `/status`（连接、数据库），合并成一份扁平结果
+   * 注 1：`/default/license/report` 是**企业版专属**接口，
+   * 社区版返回 404 `{"message":"Not found"}`（3.9.4 社区版实测）⇒ 读它整页永远是空的；
+   * 故改用社区版也提供的 `/`（版本、插件）与 `/status`（连接、数据库），合并成一份扁平结果
    * 注 2：两个请求并行发，任一失败都按原状态码抛出 —— 概览页宁可报错，也不要显示半真半假的数据
    *
    * @param id 站点ID

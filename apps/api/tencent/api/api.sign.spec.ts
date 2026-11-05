@@ -71,7 +71,7 @@ describe('api.sign', () => {
     );
   });
 
-  it('缺省只签 content-type;host（与旧私有项目一致，不签 x-tc-action）', () => {
+  it('缺省只签 content-type;host（不签 x-tc-action）', () => {
     /** 缺省签名头的规范请求串 */
     const canonical = canonicalRequestOf({
       ...OFFICIAL,

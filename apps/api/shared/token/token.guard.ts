@@ -111,7 +111,7 @@ export class TokenGuard implements CanActivate {
       /** 请求日志ID */
       await this.reqSrv.insert({
         ...params,
-        // 注：使用入参状态码，401 与 403 各记各的，此前硬编码 401 会把 403 也记成 401
+        // 注：使用入参状态码，401 与 403 各记各的；写死 401 会把 403 也记成 401
         status,
         endAt: Date.now(),
       });

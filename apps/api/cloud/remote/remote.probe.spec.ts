@@ -5,6 +5,9 @@ import { afterEach, describe, expect, it } from 'vitest';
 import {
   SUMMARY_COMMAND,
   SUMMARY_MARKERS,
+  dnsServersOf,
+  gatewaysOf,
+  interfacesOf,
   parseLinuxSummary,
   sectionsOf,
   tcpProbe,
@@ -66,6 +69,22 @@ describe('SUMMARY_COMMAND', () => {
     expect(SUMMARY_COMMAND).toContain('df -kP 2>/dev/null');
     expect(SUMMARY_COMMAND).not.toContain('df -kP /');
     expect(SUMMARY_COMMAND).toContain('cat /proc/mounts');
+  });
+
+  it('网络段覆盖链路 / 地址 / 流量 / 路由 / DNS，且只用标准命令', () => {
+    expect(SUMMARY_COMMAND).toContain('ip -o link show 2>/dev/null');
+    expect(SUMMARY_COMMAND).toContain('ip -o addr show 2>/dev/null');
+    expect(SUMMARY_COMMAND).toContain('cat /proc/net/dev 2>/dev/null');
+    expect(SUMMARY_COMMAND).toContain('ip route show default 2>/dev/null');
+    // 注：`ip` 命令缺失时（BusyBox 精简镜像）要有 /proc 兜底
+    expect(SUMMARY_COMMAND).toContain('cat /proc/net/route 2>/dev/null');
+    expect(SUMMARY_COMMAND).toContain('cat /etc/resolv.conf 2>/dev/null');
+    // 注：systemd-resolved 的存根文件里只有 127.0.0.53，上游地址在下面这个文件
+    expect(SUMMARY_COMMAND).toContain(
+      'cat /run/systemd/resolve/resolv.conf 2>/dev/null',
+    );
+    // 注：不用 `ip -j`（老版本 iproute2 不认）与 `-br`（BusyBox 不认），只求一行一接口
+    expect(SUMMARY_COMMAND).not.toContain('ip -j');
   });
 });
 
@@ -193,6 +212,10 @@ describe('parseLinuxSummary', () => {
           percent: 21,
         },
       ],
+      // 注：这份 fixture 只覆盖系统 / 磁盘段，网络段见下面独立的「网络信息」一组
+      interfaces: [],
+      gateways: [],
+      dnsServers: [],
       user: 'marbl',
     });
   });
@@ -272,5 +295,229 @@ describe('parseLinuxSummary', () => {
     const result = parseLinuxSummary(raw);
     expect(result.cpus).toBe(0);
     expect(result.uptime).toBe(0);
+  });
+});
+
+describe('网络信息', () => {
+  /**
+   * 真机（home-server / Ubuntu 22.04）抓到的网络段输出，2026-11-05
+   *
+   * 注：**逐字节照抄**（含 `\` + 多空格、制表符与行尾空格）。这份 fixture 的价值就在于真实形状 ——
+   * 自己编一份「看起来差不多」的样本，只会把解析器的错当成通过的用例
+   */
+  const LINK = [
+    '1: lo: <LOOPBACK,UP,LOWER_UP> mtu 65536 qdisc noqueue state UNKNOWN mode DEFAULT group default qlen 1000\\    link/loopback 00:00:00:00:00:00 brd 00:00:00:00:00:00',
+    '2: enp1s0: <BROADCAST,MULTICAST,UP,LOWER_UP> mtu 1500 qdisc mq state UP mode DEFAULT group default qlen 1000\\    link/ether 00:90:27:e3:67:c3 brd ff:ff:ff:ff:ff:ff',
+    '3: enp2s0: <BROADCAST,MULTICAST> mtu 1500 qdisc noop state DOWN mode DEFAULT group default qlen 1000\\    link/ether 00:90:27:e3:67:c4 brd ff:ff:ff:ff:ff:ff',
+    '6: docker0: <NO-CARRIER,BROADCAST,MULTICAST,UP> mtu 1500 qdisc noqueue state DOWN mode DEFAULT group default \\    link/ether 3e:2c:1b:e8:c3:5f brd ff:ff:ff:ff:ff:ff',
+    '7: br-9b545bac22e9: <BROADCAST,MULTICAST,UP,LOWER_UP> mtu 1500 qdisc noqueue state UP mode DEFAULT group default \\    link/ether 52:70:8e:82:7c:89 brd ff:ff:ff:ff:ff:ff',
+    '8: vethcbaaa82@if2: <BROADCAST,MULTICAST,UP,LOWER_UP> mtu 1500 qdisc noqueue master br-9b545bac22e9 state UP mode DEFAULT group default \\    link/ether 06:7e:b2:69:cd:b8 brd ff:ff:ff:ff:ff:ff link-netnsid 0',
+  ];
+  /** `ip -o addr show` 的真机输出 */
+  const ADDR = [
+    '1: lo    inet 127.0.0.1/8 scope host lo\\       valid_lft forever preferred_lft forever',
+    '1: lo    inet6 ::1/128 scope host \\       valid_lft forever preferred_lft forever',
+    '2: enp1s0    inet 192.168.1.3/24 brd 192.168.1.255 scope global enp1s0\\       valid_lft forever preferred_lft forever',
+    '2: enp1s0    inet6 2409:8a44:94:a810:290:27ff:fee3:67c3/64 scope global dynamic mngtmpaddr noprefixroute \\       valid_lft 195027sec preferred_lft 108627sec',
+    '2: enp1s0    inet6 fe80::290:27ff:fee3:67c3/64 scope link \\       valid_lft forever preferred_lft forever',
+    '6: docker0    inet 172.16.0.1/24 brd 172.16.0.255 scope global docker0\\       valid_lft forever preferred_lft forever',
+    '6: docker0    inet6 fe80::3c2c:1bff:fee8:c35f/64 scope link \\       valid_lft forever preferred_lft forever',
+    '7: br-9b545bac22e9    inet 172.18.0.1/16 brd 172.18.255.255 scope global br-9b545bac22e9\\       valid_lft forever preferred_lft forever',
+    '7: br-9b545bac22e9    inet6 fe80::5070:8eff:fe82:7c89/64 scope link \\       valid_lft forever preferred_lft forever',
+    '8: vethcbaaa82    inet6 fe80::47e:b2ff:fe69:cdb8/64 scope link \\       valid_lft forever preferred_lft forever',
+  ];
+  /** `/proc/net/dev` 的真机输出（表头两行照抄） */
+  const NETDEV = [
+    'Inter-|   Receive                                                |  Transmit',
+    ' face |bytes    packets errs drop fifo frame compressed multicast|bytes    packets errs drop fifo colls carrier compressed',
+    '    lo:  131840     954    0    0    0     0          0         0   131840     954    0    0    0     0       0          0',
+    'enp1s0: 586022896  501913   42 25737    0    23          0      5159 57743295  422301    0    0    0     0       0          0',
+    'enp2s0:       0       0    0    0    0     0          0         0        0       0    0    0    0     0       0          0',
+    'docker0:     280      10    0    0    0     0          0         0     1760      16    0    0    0     0       0          0',
+    'br-9b545bac22e9: 67522298  477478    0    0    0     0          0         0 613579905  600118    0    0    0     0       0          0',
+    'vethcbaaa82:  632953    2529    0    0    0     0          0         0   249925    3192    0    0    0     0       0          0',
+  ];
+
+  it('三份来源合并到同一个接口上（状态 / MAC / MTU / 地址 / 流量）', () => {
+    /** 接口清单 */
+    const list = interfacesOf(LINK, ADDR, NETDEV);
+    expect(list.find((item) => item.name === 'enp1s0')).toEqual({
+      name: 'enp1s0',
+      state: 'up',
+      mac: '00:90:27:e3:67:c3',
+      mtu: 1500,
+      addresses: [
+        '192.168.1.3/24',
+        '2409:8a44:94:a810:290:27ff:fee3:67c3/64',
+        'fe80::290:27ff:fee3:67c3/64',
+      ],
+      rxBytes: 586022896,
+      txBytes: 57743295,
+    });
+  });
+
+  it('回环与 veth 对端被剔除，其余按接口名升序', () => {
+    expect(interfacesOf(LINK, ADDR, NETDEV).map((item) => item.name)).toEqual([
+      'br-9b545bac22e9',
+      'docker0',
+      'enp1s0',
+      'enp2s0',
+    ]);
+  });
+
+  it('flags 里有 UP 但 state 是 DOWN 时判为停用（docker0 没容器 / 网线没插）', () => {
+    /** docker0，注：`<NO-CARRIER,...,UP>` 与 `state DOWN` 同时出现，只看 flags 会误判成启用 */
+    const docker0 = interfacesOf(LINK, ADDR, NETDEV).find(
+      (item) => item.name === 'docker0',
+    );
+    expect(docker0?.state).toBe('down');
+  });
+
+  it('state 为 UNKNOWN 的接口（lo / tun）按 flags 判定，不判成停用', () => {
+    /** 只给 lo 一条，注：它同时是 `state UNKNOWN` 与 `<LOOPBACK,UP,LOWER_UP>` */
+    const list = interfacesOf([LINK[0] ?? ''], [], []);
+    // 注：正则表达式按 `lo` 过滤，故这里用 tun0 的形态验证同一条规则
+    expect(list).toEqual([]);
+    /** tun0 的真机形态 */
+    const tun = interfacesOf(
+      [
+        '9: tun0: <POINTOPOINT,MULTICAST,NOARP,UP,LOWER_UP> mtu 1420 qdisc fq_codel state UNKNOWN mode DEFAULT group default qlen 500\\    link/none ',
+      ],
+      [],
+      [],
+    );
+    expect(tun[0]?.state).toBe('up');
+    // 注：`link/none` 没有 MAC，给空串而不是 `none`
+    expect(tun[0]?.mac).toBe('');
+  });
+
+  it('只在 /proc/net/dev 出现的接口状态给 unknown，不猜成 UP / DOWN', () => {
+    /** 接口清单，注：WG 网卡只有流量计数，没有链路与地址段（`ip` 命令缺失时会这样） */
+    const list = interfacesOf(
+      [],
+      [],
+      ['wg0: 1024 8 0 0 0 0 0 0 2048 9 0 0 0 0 0 0'],
+    );
+    expect(list).toEqual([
+      {
+        name: 'wg0',
+        state: 'unknown',
+        mac: '',
+        mtu: 0,
+        addresses: [],
+        rxBytes: 1024,
+        txBytes: 2048,
+      },
+    ]);
+  });
+
+  it('接口名带 @ifN（veth 对端）时能剥掉后缀，不会把名字截成空', () => {
+    /** 接口清单 */
+    const list = interfacesOf([LINK[5] ?? ''], [], []);
+    expect(list).toEqual([]);
+    /** 放开过滤后单独验名字解析：用 br 前缀的假名字带 @ 后缀 */
+    const bridged = interfacesOf(
+      [
+        '10: br-test@if2: <BROADCAST,MULTICAST,UP,LOWER_UP> mtu 1500 qdisc noqueue state UP mode DEFAULT group default \\    link/ether 52:70:8e:82:7c:8a brd ff:ff:ff:ff:ff:ff',
+      ],
+      [],
+      [],
+    );
+    expect(bridged[0]?.name).toBe('br-test');
+    expect(bridged[0]?.mac).toBe('52:70:8e:82:7c:8a');
+  });
+
+  it('空的 / 畸形的行不让解析抛异常', () => {
+    expect(interfacesOf(['乱七八糟'], [''], ['   '])).toEqual([]);
+  });
+
+  it('默认网关从 ip route 取（网关 + 出口接口）', () => {
+    expect(
+      gatewaysOf(['default via 192.168.1.1 dev enp1s0 proto static '], []),
+    ).toEqual([{ via: '192.168.1.1', device: 'enp1s0' }]);
+  });
+
+  it('没有 ip 命令时用 /proc/net/route 兜底，小端十六进制按字节倒序解', () => {
+    /** 真机 `/proc/net/route` 的行（制表符分隔、行尾有空格） */
+    const netRoute = [
+      'Iface\tDestination\tGateway \tFlags\tRefCnt\tUse\tMetric\tMask\t\tMTU\tWindow\tIRTT',
+      'enp1s0\t00000000\t0101A8C0\t0003\t0\t0\t0\t00000000\t0\t0\t0',
+      'docker0\t000010AC\t00000000\t0001\t0\t0\t0\t00FFFFFF\t0\t0\t0',
+    ];
+    expect(gatewaysOf([], netRoute)).toEqual([
+      { via: '192.168.1.1', device: 'enp1s0' },
+    ]);
+  });
+
+  it('点对点链路没有网关地址时保留该行（出口接口本身就是答案）', () => {
+    expect(gatewaysOf(['default dev ppp0 scope link'], [])).toEqual([
+      { via: '', device: 'ppp0' },
+    ]);
+  });
+
+  it('多默认路由（双网卡）全部保留，重复行去重', () => {
+    expect(
+      gatewaysOf(
+        [
+          'default via 192.168.1.1 dev enp1s0 proto static metric 100',
+          'default via 192.168.1.1 dev enp1s0 proto static metric 100',
+          'default via 10.0.0.1 dev wg0 proto static metric 200',
+        ],
+        [],
+      ),
+    ).toEqual([
+      { via: '192.168.1.1', device: 'enp1s0' },
+      { via: '10.0.0.1', device: 'wg0' },
+    ]);
+  });
+
+  it('DNS 只认 nameserver：注释、options、search 全部跳过', () => {
+    expect(
+      dnsServersOf([
+        '# This is /run/systemd/resolve/stub-resolv.conf managed by man:systemd-resolved(8).',
+        '; 注释也能用分号',
+        'nameserver 223.5.5.5',
+        'nameserver 114.114.114.114',
+        'nameserver 223.5.5.5',
+        'options edns0 trust-ad',
+        'search .',
+        '',
+      ]),
+    ).toEqual(['223.5.5.5', '114.114.114.114']);
+  });
+
+  it('systemd-resolved 环境下用上游文件，而不是存根 127.0.0.53', () => {
+    /** 概览输出 */
+    const raw = [
+      '@@RESOLV@@',
+      'nameserver 127.0.0.53',
+      'options edns0 trust-ad',
+      '@@RESOLVUP@@',
+      'nameserver 223.5.5.5',
+      'nameserver 114.114.114.114',
+      'nameserver fe80::1%2',
+      '@@END@@',
+    ].join('\n');
+    expect(parseLinuxSummary(raw).dnsServers).toEqual([
+      '223.5.5.5',
+      '114.114.114.114',
+      'fe80::1%2',
+    ]);
+  });
+
+  it('上游文件读不到时退回 /etc/resolv.conf', () => {
+    /** 概览输出 */
+    const raw = ['@@RESOLV@@', 'nameserver 192.168.1.1', '@@END@@'].join('\n');
+    expect(parseLinuxSummary(raw).dnsServers).toEqual(['192.168.1.1']);
+  });
+
+  it('网络段全缺失时三组字段都是空数组（不抛异常）', () => {
+    /** 概览 */
+    const result = parseLinuxSummary(
+      '@@OS@@\nPRETTY_NAME="Ubuntu 22.04"\n@@END@@',
+    );
+    expect(result.interfaces).toEqual([]);
+    expect(result.gateways).toEqual([]);
+    expect(result.dnsServers).toEqual([]);
   });
 });

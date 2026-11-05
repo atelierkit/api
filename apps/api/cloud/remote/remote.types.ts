@@ -83,6 +83,40 @@ export interface RemoteDiskMount {
   percent: number;
 }
 
+/**
+ * 网络接口链路状态
+ *
+ * 注：留 `unknown` 这一档是因为「取不到」与「已停用」必须分开 ——
+ * 精简系统里可能只有 `/proc/net/dev`（没有任何链路信息），把那种情况画成 DOWN 是假结论
+ */
+export type RemoteLinkState = 'up' | 'down' | 'unknown';
+
+/** 网络接口 */
+export interface RemoteNetworkInterface {
+  /** 接口名，如 `eth0` / `docker0` / `br-9b54…` */
+  name: string;
+  /** 链路状态 */
+  state: RemoteLinkState;
+  /** MAC 地址，无 MAC 的接口（tun / ppp / wireguard）为空串 */
+  mac: string;
+  /** 最大传输单元，取不到时为 0 */
+  mtu: number;
+  /** 地址（带前缀长度，如 `192.168.1.3/24`），IPv4 在前、IPv6 在后 */
+  addresses: string[];
+  /** 累计接收字节 */
+  rxBytes: number;
+  /** 累计发送字节 */
+  txBytes: number;
+}
+
+/** 默认网关 */
+export interface RemoteGateway {
+  /** 网关地址，点对点链路（ppp / tun）可能为空串 */
+  via: string;
+  /** 出口接口，取不到时为空串 */
+  device: string;
+}
+
 /** 主机概览 */
 export interface RemoteSummary {
   /** 发行版名称，如 `Ubuntu 22.04.4 LTS` */
@@ -110,6 +144,20 @@ export interface RemoteSummary {
    * 已剔除 tmpfs / squashfs / overlay 等伪文件系统的行（`/` 例外，总是保留）
    */
   disks: RemoteDiskMount[];
+  /**
+   * 网络接口，注：已剔除回环（`lo`）与 `veth*`（容器两端成对出现，一台 Docker 宿主动辄几十个）；
+   * 按接口名升序
+   */
+  interfaces: RemoteNetworkInterface[];
+  /** 默认网关，注：优先取 `ip route`，取不到时用 `/proc/net/route` 兜底 */
+  gateways: RemoteGateway[];
+  /**
+   * DNS 服务器
+   *
+   * 注：systemd-resolved 环境下 `/etc/resolv.conf` 只有 `127.0.0.53`（本地存根，告诉不了任何事），
+   * 故优先取 `/run/systemd/resolve/resolv.conf` 里的上游地址
+   */
+  dnsServers: string[];
   /** 当前登录用户 */
   user: string;
 }

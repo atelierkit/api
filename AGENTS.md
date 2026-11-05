@@ -122,7 +122,7 @@
      新建 / 换证书时先校验「一张证书 + 可解析 + 与私钥配对」，别等握手时报 `key values mismatch`。
 - **`apps/api/cloud/remote`**：**新建**的远程连接模块（2026-11-03），只做 **Linux 的 SSH**（不接 Windows / RDP）。
   表 `remotes` / `remotes_logs` 存主机与凭据，接口前缀 `cloud/remote`，全部 `@Allow('admin')`；
-  终端数据面走 **WebSocket 命名空间 `/remote`**（`RemoteGateway`），是本仓库第一处 WS 业务网关。十一条约定：
+  终端数据面走 **WebSocket 命名空间 `/remote`**（`RemoteGateway`），是本仓库第一处 WS 业务网关。十二条约定：
   1. **浏览器不碰 SSH 协议**：建连、认证、PTY、指纹校验全在 api（`ssh2`），前端只经 WS 换原始字节。
      新增依赖仅 `ssh2`（纯 JS，alpine 无需原生编译；可选 `cpu-features` 编译失败会被忽略，属正常）。
   2. **WS 不受 `TokenGuard` 保护** —— 它只处理 `switchToHttp()`。故用**一次性票据**：`POST /cloud/remote/ticket`
@@ -148,6 +148,13 @@
       `onGatewayDisconnect` 必须真正 `end()` SSH（只从 Map 删引用不会断 TCP，目标机 `who` 里会留残留会话）。
   11. **不要把握手成功前的指纹写库**，也不要把「最后连接时间」放主表（`CommonService.update` 会把整行搬日志表，
       每连一次就多一条变更历史）。模块 DDL 见 `deploy/remotes-module.ddl.sql`（docker / kubernetes 的 DDL 仍只在工控机上）。
+  12. **概览的网络段以 `ip -o` 为准，且「链路启用」看 `state` 不看 flags**（2026-11-05 真机校正）：
+      `<...,UP,...>` 在 `NO-CARRIER`（网线没插 / `docker0` 没容器）时同样是 UP，真正该读的是 `state UP|DOWN`；
+      `state UNKNOWN`（`lo` / `tun`）才退回 flags，三份来源都取不到时状态给 `unknown` 而不是 `down`。
+      接口名后的 `@ifN` 要先剥掉；`lo` 与 `veth*` 必须过滤（一台 Docker 宿主机能列出几十个 veth）。
+      DNS 优先读 `/run/systemd/resolve/resolv.conf`（`/etc/resolv.conf` 在 systemd-resolved 下只有存根 `127.0.0.53`），
+      网关优先 `ip route show default`、兜底 `/proc/net/route`（小端十六进制，需按字节倒序解）。
+      不用 `ip -j` / `ip -br`（老 iproute2 / BusyBox 分别不认），只用两边都支持的 `-o`。
 - **`apps/api/tencent`**：自旧私有 `api` 项目 的 `src/tencent` 迁入的**腾讯云模块**（`TencentModule`），
   接口前缀 `tencent/`（`ssl` / `dns` / `domain` / `cdn` / `firewall` / `lighthouse`），全部 `@Allow('admin')`；
   依赖 `CloudModule` —— `KeyService` 取密钥、`KongService` + `ObjectService` 把 SSL 证书部署到 KONG 站点。约定：

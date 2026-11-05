@@ -1,7 +1,13 @@
 // 外部依赖
 import { connect } from 'node:net';
 // 内部依赖
-import type { RemoteDiskMount, RemoteSummary } from './remote.types.js';
+import type {
+  RemoteDiskMount,
+  RemoteGateway,
+  RemoteLinkState,
+  RemoteNetworkInterface,
+  RemoteSummary,
+} from './remote.types.js';
 
 /** TCP 探测超时（毫秒），注：比握手超时短 —— 端口都不通时没必要等到握手阶段 */
 export const PROBE_TIMEOUT = 5000;
@@ -34,6 +40,20 @@ export const SUMMARY_MARKERS = {
   disk: '@@DISK@@',
   /** 挂载点 → 文件系统类型（取自 `/proc/mounts`） */
   fstype: '@@FSTYPE@@',
+  /** 链路信息（`ip -o link show`：状态 / MAC / MTU） */
+  link: '@@LINK@@',
+  /** 接口地址（`ip -o addr show`） */
+  addr: '@@ADDR@@',
+  /** 接口流量（`/proc/net/dev`，任何 Linux 都有） */
+  netdev: '@@NETDEV@@',
+  /** 默认路由（`ip route show default`） */
+  route: '@@ROUTE@@',
+  /** 默认路由兜底（`/proc/net/route`，精简系统里没有 `ip` 命令） */
+  netroute: '@@NETROUTE@@',
+  /** DNS（`/etc/resolv.conf`） */
+  resolv: '@@RESOLV@@',
+  /** 上游 DNS（`/run/systemd/resolve/resolv.conf`，systemd-resolved 环境下才是真地址） */
+  resolvUpstream: '@@RESOLVUP@@',
   /** 当前用户 */
   who: '@@WHO@@',
   /** 结束标记，注：有它才能判断「输出被截断」而不是「最后一段本来就为空」 */
@@ -68,6 +88,23 @@ export const SUMMARY_COMMAND = [
   'df -kP 2>/dev/null',
   `echo '${SUMMARY_MARKERS.fstype}'`,
   'cat /proc/mounts 2>/dev/null',
+  `echo '${SUMMARY_MARKERS.link}'`,
+  'ip -o link show 2>/dev/null',
+  `echo '${SUMMARY_MARKERS.addr}'`,
+  'ip -o addr show 2>/dev/null',
+  // 注：`/proc/net/dev` 给流量，且在没有 `ip` 命令的精简镜像里是唯一能拿到接口名的来源
+  `echo '${SUMMARY_MARKERS.netdev}'`,
+  'cat /proc/net/dev 2>/dev/null',
+  `echo '${SUMMARY_MARKERS.route}'`,
+  'ip route show default 2>/dev/null',
+  `echo '${SUMMARY_MARKERS.netroute}'`,
+  'cat /proc/net/route 2>/dev/null',
+  `echo '${SUMMARY_MARKERS.resolv}'`,
+  'cat /etc/resolv.conf 2>/dev/null',
+  // 注：systemd-resolved 下 `/etc/resolv.conf` 只有 `nameserver 127.0.0.53`（本地存根），
+  // 真正的上游 DNS 在这个文件里；读不到时为空，解析侧会自动退回上面那段
+  `echo '${SUMMARY_MARKERS.resolvUpstream}'`,
+  'cat /run/systemd/resolve/resolv.conf 2>/dev/null',
   `echo '${SUMMARY_MARKERS.who}'`,
   'whoami 2>/dev/null',
   `echo '${SUMMARY_MARKERS.end}'`,
@@ -357,6 +394,332 @@ export function diskMountsOf(
 }
 
 /**
+ * 不列进概览的接口
+ *
+ * 注 1：`lo` 是回环，收发量与本机对外网络无关
+ * 注 2：`veth*` 是容器网络的宿主机侧端点，一台跑着若干容器的 Docker 宿主机能列出几十个，
+ * 而真正的信息在 `docker0` / `br-*` 网桥上 —— 全列出来会把有用的那两行淹掉
+ */
+const HIDDEN_INTERFACE = /^(?:lo|veth.*)$/;
+
+/** `ip -o link show` 的一行，注：`vethxxx@if2` 的对端后缀要先剥掉再取接口名 */
+const LINK_LINE = /^\d+:\s+([^:@\s]+?)(?:@\S+)?:\s+<([^>]*)>(.*)$/;
+
+/** `ip -o addr show` 的一行，注：与上面同理，接口名可能带 `@ifN` */
+const ADDR_LINE = /^\d+:\s+([^:@\s]+?)(?:@\S+)?\s+(inet6?)\s+(\S+)/;
+
+/** 链路信息 */
+interface LinkInfo {
+  /** 状态 */
+  state: RemoteLinkState;
+  /** MAC 地址 */
+  mac: string;
+  /** 最大传输单元 */
+  mtu: number;
+}
+
+/**
+ * 解析 `ip -o link show`
+ *
+ * 注：`<...,UP,...>` 里的 `UP` 只代表「管理上已启用」，网线没插或 `docker0` 上没有容器时
+ * 它同样是 UP（`NO-CARRIER`），真正该看的是 `state UP|DOWN`。故先取 `state`，
+ * 只有精简系统的 `ip` 不给该字段时才退回 flags
+ *
+ * @param lines `ip -o link show` 的行
+ * @returns 接口名 → 链路信息
+ */
+function linksOf(lines: readonly string[]): Map<string, LinkInfo> {
+  /** 接口名 → 链路信息 */
+  const links = new Map<string, LinkInfo>();
+  for (const line of lines) {
+    /** 匹配结果 */
+    const parsed = LINK_LINE.exec(line.trim());
+    if (parsed === null || (parsed[1] ?? '') === '') {
+      continue;
+    }
+    /** 标志位 */
+    const flags = (parsed[2] ?? '').split(',');
+    /** 冒号之后的部分（mtu / state / link/ether 都在这里） */
+    const rest = parsed[3] ?? '';
+    /** `state` 字段，注：`UNKNOWN`（lo / tun）不算停用，交给 flags 判断 */
+    const state = /state\s+(UP|DOWN)\b/.exec(rest)?.[1];
+    /** 是否启用 */
+    const enabled = state === undefined ? flags.includes('UP') : state === 'UP';
+    links.set(parsed[1] ?? '', {
+      state: enabled ? 'up' : 'down',
+      // 注：`link/none`（tun / wireguard）没有 MAC，取不到就是空串
+      mac: /\blink\/(?:ether|loopback)\s+(\S+)/.exec(rest)?.[1] ?? '',
+      mtu: Math.round(numberOrZero(/\bmtu\s+(\d+)/.exec(rest)?.[1] ?? '')),
+    });
+  }
+  return links;
+}
+
+/**
+ * 解析 `ip -o addr show`
+ *
+ * @param lines `ip -o addr show` 的行
+ * @returns 接口名 → 地址清单（保留原始顺序）
+ */
+function addressesOf(lines: readonly string[]): Map<string, string[]> {
+  /** 接口名 → 地址 */
+  const result = new Map<string, string[]>();
+  for (const line of lines) {
+    /** 匹配结果，注：第 2 组是 `inet` / `inet6`，第 3 组是带前缀的地址 */
+    const parsed = ADDR_LINE.exec(line.trim());
+    const name = parsed?.[1] ?? '';
+    const address = (parsed?.[3] ?? '').trim();
+    if (name === '' || address === '') {
+      continue;
+    }
+    /** 该接口已有的地址 */
+    const existing = result.get(name) ?? [];
+    existing.push(address);
+    result.set(name, existing);
+  }
+  return result;
+}
+
+/**
+ * 解析 `/proc/net/dev` 的流量计数
+ *
+ * 注：格式为 `接口名: 收包 8 项 发包 8 项`，冒号前一律是接口名（`br-xxx` 这类长名字后面不带空格），
+ * 故按**第一个冒号**切；两条表头里没有冒号，自然被跳过
+ *
+ * @param lines `/proc/net/dev` 的行
+ * @returns 接口名 → 收发字节
+ */
+function trafficOf(
+  lines: readonly string[],
+): Map<string, { rx: number; tx: number }> {
+  /** 接口名 → 收发字节 */
+  const result = new Map<string, { rx: number; tx: number }>();
+  for (const line of lines) {
+    /** 冒号位置 */
+    const index = line.indexOf(':');
+    if (index < 0) {
+      continue;
+    }
+    /** 接口名 */
+    const name = line.slice(0, index).trim();
+    /** 计数项 */
+    const fields = line
+      .slice(index + 1)
+      .trim()
+      .split(/\s+/);
+    if (name === '' || fields.length < 9) {
+      continue;
+    }
+    result.set(name, {
+      // 注：接收的第 1 项、发送的第 1 项（发送段起点固定在下标 8）
+      rx: Math.round(numberOrZero(fields[0] ?? '')),
+      tx: Math.round(numberOrZero(fields[8] ?? '')),
+    });
+  }
+  return result;
+}
+
+/**
+ * 合并三份来源得到接口清单
+ *
+ * 注 1：三份来源各有对方没有的接口 —— 只有 `/proc/net/dev` 有流量的（veth）、
+ * 只有 `ip addr` 有地址而没有 MAC 的，所以取并集
+ * 注 2：链路信息缺失时状态给 `unknown`，不猜成 UP / DOWN
+ * 注 3：地址排序为「IPv4 在前、IPv6 在后」，组内保留系统给的顺序
+ *
+ * @param linkLines `ip -o link show` 的行
+ * @param addrLines `ip -o addr show` 的行
+ * @param netdevLines `/proc/net/dev` 的行
+ * @returns 接口清单，按接口名升序
+ */
+export function interfacesOf(
+  linkLines: readonly string[],
+  addrLines: readonly string[],
+  netdevLines: readonly string[],
+): RemoteNetworkInterface[] {
+  /** 接口名 → 汇总 */
+  const merged = new Map<string, RemoteNetworkInterface>();
+
+  /**
+   * 取或建
+   *
+   * @param name 接口名
+   * @returns 汇总项，被过滤掉的接口给 null
+   */
+  const ensure = (name: string): RemoteNetworkInterface | null => {
+    if (name === '' || HIDDEN_INTERFACE.test(name)) {
+      return null;
+    }
+    /** 已有项 */
+    const existing = merged.get(name);
+    if (existing !== undefined) {
+      return existing;
+    }
+    /** 新建项 */
+    const created: RemoteNetworkInterface = {
+      name,
+      state: 'unknown',
+      mac: '',
+      mtu: 0,
+      addresses: [],
+      rxBytes: 0,
+      txBytes: 0,
+    };
+    merged.set(name, created);
+    return created;
+  };
+
+  for (const [name, link] of linksOf(linkLines)) {
+    /** 汇总项 */
+    const item = ensure(name);
+    if (item === null) {
+      continue;
+    }
+    item.state = link.state;
+    item.mac = link.mac;
+    item.mtu = link.mtu;
+  }
+  for (const [name, addresses] of addressesOf(addrLines)) {
+    /** 汇总项 */
+    const item = ensure(name);
+    if (item === null) {
+      continue;
+    }
+    item.addresses = addresses;
+  }
+  for (const [name, traffic] of trafficOf(netdevLines)) {
+    /** 汇总项 */
+    const item = ensure(name);
+    if (item === null) {
+      continue;
+    }
+    item.rxBytes = traffic.rx;
+    item.txBytes = traffic.tx;
+  }
+  for (const item of merged.values()) {
+    // 注：`Array.prototype.sort` 是稳定排序，同族地址之间的顺序不变
+    item.addresses.sort(
+      (left, right) => Number(left.includes(':')) - Number(right.includes(':')),
+    );
+  }
+  return [...merged.values()].sort((left, right) =>
+    left.name.localeCompare(right.name),
+  );
+}
+
+/**
+ * `/proc/net/route` 的小端十六进制 IPv4 → 点分十进制
+ *
+ * 注：该文件把 32 位地址按**主机字节序**写成十六进制，`0101A8C0` 是 `192.168.1.1`
+ * 而不是 `1.1.168.192`，故要按字节倒序拆
+ *
+ * @param hex 8 位十六进制串
+ * @returns 点分十进制地址，格式不认识时为空串
+ */
+function ipv4OfHex(hex: string): string {
+  if (!/^[0-9a-fA-F]{8}$/.test(hex)) {
+    return '';
+  }
+  /** 32 位整数 */
+  const value = Number.parseInt(hex, 16);
+  return [
+    value & 0xff,
+    (value >>> 8) & 0xff,
+    (value >>> 16) & 0xff,
+    (value >>> 24) & 0xff,
+  ].join('.');
+}
+
+/**
+ * 解析默认网关
+ *
+ * 注 1：`ip route show default` 是首选（同时给出网关与出口接口）
+ * 注 2：`ip` 命令不存在时（BusyBox 精简镜像）退回 `/proc/net/route` —— 该文件里
+ * `Destination` 为全零的行就是默认路由
+ * 注 3：同一网关经多条路径出现（多网卡双默认路由）时全部保留，去重按「地址 + 接口」
+ *
+ * @param routeLines `ip route show default` 的行
+ * @param netRouteLines `/proc/net/route` 的行
+ * @returns 默认网关清单，取不到时为空数组
+ */
+export function gatewaysOf(
+  routeLines: readonly string[],
+  netRouteLines: readonly string[],
+): RemoteGateway[] {
+  /** 网关清单 */
+  const gateways: RemoteGateway[] = [];
+  /** 已收录的键 */
+  const seen = new Set<string>();
+
+  /**
+   * 追加一条（去重）
+   *
+   * @param via 网关地址
+   * @param device 出口接口
+   */
+  const push = (via: string, device: string): void => {
+    /** 去重键 */
+    const key = `${via}|${device}`;
+    if (seen.has(key)) {
+      return;
+    }
+    seen.add(key);
+    gateways.push({ via, device });
+  };
+
+  for (const line of routeLines) {
+    /** 去掉行尾空白 */
+    const text = line.trim();
+    if (!/^default\b/.test(text)) {
+      continue;
+    }
+    push(
+      /\bvia\s+(\S+)/.exec(text)?.[1] ?? '',
+      /\bdev\s+(\S+)/.exec(text)?.[1] ?? '',
+    );
+  }
+  if (gateways.length > 0) {
+    return gateways;
+  }
+  for (const line of netRouteLines) {
+    /** 字段：接口 目标 网关 标志 … */
+    const fields = line.trim().split(/\s+/);
+    if (fields.length < 3 || fields[1] !== '00000000') {
+      continue;
+    }
+    push(ipv4OfHex(fields[2] ?? ''), fields[0] ?? '');
+  }
+  return gateways;
+}
+
+/**
+ * 解析 DNS 服务器
+ *
+ * 注：只认 `nameserver` 行；`#` / `;` 注释与 `options` / `search` 一律跳过（resolv.conf 头部
+ * 有十几行说明文字，不滤掉会把整张卡片塞满注释）
+ *
+ * @param lines resolv.conf 的行
+ * @returns 地址清单（去重、保留原顺序）
+ */
+export function dnsServersOf(lines: readonly string[]): string[] {
+  /** 地址清单 */
+  const servers: string[] = [];
+  for (const line of lines) {
+    /** 去掉行尾注释后的正文 */
+    const text = line.trim();
+    if (text === '' || text.startsWith('#') || text.startsWith(';')) {
+      continue;
+    }
+    /** 匹配到的地址 */
+    const address = /^nameserver\s+(\S+)/.exec(text)?.[1] ?? '';
+    if (address !== '' && !servers.includes(address)) {
+      servers.push(address);
+    }
+  }
+  return servers;
+}
+
+/**
  * 解析概览输出
  *
  * 注：逐段容错 —— 某段为空或格式不认识时只让对应字段为 0，不抛异常。
@@ -380,6 +743,8 @@ export function parseLinuxSummary(raw: string): RemoteSummary {
   const osLine = (sections.get('os') ?? []).find((line) =>
     line.startsWith('PRETTY_NAME='),
   );
+  /** 上游 DNS，注：systemd-resolved 环境下 `/etc/resolv.conf` 只有本地存根 `127.0.0.53` */
+  const upstreamDns = dnsServersOf(sections.get('resolvUpstream') ?? []);
   return {
     osName: (osLine ?? '').replace(/^PRETTY_NAME=/, '').replace(/^"|"$/g, ''),
     // 注：`Linux 5.15.0-91-generic` 取第二段；取不到就原样返回
@@ -399,6 +764,20 @@ export function parseLinuxSummary(raw: string): RemoteSummary {
       sections.get('disk') ?? [],
       mountTypesOf(sections.get('fstype') ?? []),
     ),
+    interfaces: interfacesOf(
+      sections.get('link') ?? [],
+      sections.get('addr') ?? [],
+      sections.get('netdev') ?? [],
+    ),
+    gateways: gatewaysOf(
+      sections.get('route') ?? [],
+      sections.get('netroute') ?? [],
+    ),
+    // 注：上游文件读到内容就用它，否则退回 `/etc/resolv.conf`
+    dnsServers:
+      upstreamDns.length > 0
+        ? upstreamDns
+        : dnsServersOf(sections.get('resolv') ?? []),
     user: firstOf(sections, 'who'),
   };
 }

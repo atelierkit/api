@@ -10,6 +10,42 @@ import { BarEntity } from './entities/bar.entity.js';
 /** K 线单次查询上限（客户端硬编码常量的服务端表达） */
 const BAR_ROW_LIMIT = 5000;
 
+/** 联想候选条数上限（与桌面端 almanac 的 12 条同口径） */
+const SUGGEST_LIMIT = 12;
+
+/** 证券联想的一个候选 */
+export interface SecurityOption {
+  /** 规范代码（如 `sh.600000`） */
+  code: string;
+  /** 名称 */
+  name: string;
+  /** 类型（落库枚举名） */
+  type: string;
+  /** 交易所（落库枚举名） */
+  market: string;
+}
+
+/**
+ * 把用户输入转成 ILIKE 的「包含」模式
+ *
+ * ⚠️ 必须转义 `%` / `_` / `\`：它们绑定进 SQL 参数后仍是 LIKE 的通配符，
+ * 用户敲一个 `%` 就能把全表捞出来（联想列表只有 12 条，于是那 12 条毫无意义）。
+ * `\` 是 PG 的默认转义符，故 `\%` 表示字面量百分号。
+ */
+export function likeContains(keyword: string): string {
+  return `%${escapeLike(keyword)}%`;
+}
+
+/** 把用户输入转成 ILIKE 的「前缀」模式（同上，需转义通配符） */
+export function likePrefix(keyword: string): string {
+  return `${escapeLike(keyword)}%`;
+}
+
+/** 转义 LIKE 通配符（`\` 自身也要转义，否则 `\%` 会变成「转义符 + 通配符」） */
+function escapeLike(value: string): string {
+  return value.replace(/[\\%_]/g, (ch) => `\\${ch}`);
+}
+
 /** 证券清单查询结果 */
 export interface SecurityPageResult {
   /** 当前页数据 */
@@ -134,6 +170,52 @@ export class DataQueryService {
       total,
       marketTotal,
     };
+  }
+
+  /**
+   * 证券联想（代码 / 六位数字 / 名称片段，最多 12 条）
+   *
+   * 排序不是装饰，它就是这个功能可用性的全部：候选只显示十几条，而「600」「银行」这类输入
+   * 会命中成百上千条。故按「档位」分级（越像用户要找的那一只越靠前）：
+   * ① 代码完全相同（代码已经粘全了）→ ② 代码或六位数字**以**查询开头（逐位输入）→
+   * ③ 名称**以**查询开头 → ④ 名称**包含**（收尾档，命中最多、也最不精确）。
+   * 同档内先让**在市**证券靠前（退市证券要留着 —— 查历史 K 线要用，但不该占前排），再按代码升序，
+   * 于是同样的输入永远给同样的顺序。
+   *
+   * ⚠ 联想是「每敲一键查一次」：只取 4 列、`LIMIT 12`，且不做 `count(*)`（分页才需要总数）。
+   */
+  async suggest(query: { keyword?: string }): Promise<SecurityOption[]> {
+    const keyword = query.keyword?.trim() ?? '';
+    if (!keyword) {
+      return [];
+    }
+
+    const rows = await this.securityRepo
+      .createQueryBuilder('s')
+      .select(['s.code', 's.name', 's.type', 's.market'])
+      .where('(s.code ILIKE :kw OR s.name ILIKE :kw)', { kw: likeContains(keyword) })
+      .setParameter('prefix', likePrefix(keyword))
+      .setParameter('exact', keyword.toLowerCase())
+      .orderBy(
+        `CASE
+           WHEN LOWER(s.code) = :exact THEN 0
+           WHEN s.code ILIKE :prefix OR split_part(s.code, '.', 2) ILIKE :prefix THEN 1
+           WHEN s.name ILIKE :prefix THEN 2
+           ELSE 3
+         END`,
+        'ASC',
+      )
+      .addOrderBy(`CASE WHEN s.status = 'Listed' THEN 0 ELSE 1 END`, 'ASC')
+      .addOrderBy('s.code', 'ASC')
+      .limit(SUGGEST_LIMIT)
+      .getMany();
+
+    return rows.map((s) => ({
+      code: s.code,
+      name: s.name,
+      type: s.type,
+      market: s.market,
+    }));
   }
 
   /** 交易日历（一次整年，只返回存在的行） */

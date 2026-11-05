@@ -2,7 +2,7 @@
 import { describe, expect, it } from 'vitest';
 import { validate } from 'class-validator';
 // 内部依赖
-import { BarQueryDto, CalendarQueryDto, SecurityQueryDto } from './query.dto.js';
+import { BarQueryDto, CalendarQueryDto, SecurityQueryDto, SecuritySuggestQueryDto } from './query.dto.js';
 
 describe('查询 DTO', () => {
   it('证券查询：合法条件通过', async () => {
@@ -32,6 +32,17 @@ describe('查询 DTO', () => {
     const dto = Object.assign(new SecurityQueryDto(), { size: 999 });
     const errors = await validate(dto);
     expect(errors.length).toBeGreaterThan(0);
+  });
+
+  it('联想查询：关键字可空、超长被拒', async () => {
+    const ok = Object.assign(new SecuritySuggestQueryDto(), { keyword: '浦发' });
+    expect(await validate(ok)).toHaveLength(0);
+
+    // 空查询合法：由服务层返回空列表（「空 = 全部」这种语义不能落到这里）
+    expect(await validate(new SecuritySuggestQueryDto())).toHaveLength(0);
+
+    const tooLong = Object.assign(new SecuritySuggestQueryDto(), { keyword: 'x'.repeat(33) });
+    expect((await validate(tooLong)).length).toBeGreaterThan(0);
   });
 
   it('日历查询：year 必须是 4 位数字', async () => {

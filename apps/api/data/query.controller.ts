@@ -1,7 +1,7 @@
 // 外部依赖
 import { Controller, Get, Query } from '@nestjs/common';
 // 内部依赖
-import { BarQueryDto, CalendarQueryDto, SecurityQueryDto } from './query.dto.js';
+import { BarQueryDto, CalendarQueryDto, SecurityQueryDto, SecuritySuggestQueryDto } from './query.dto.js';
 import { DataQueryService } from './query.service.js';
 
 /**
@@ -22,6 +22,12 @@ export class DataQueryController {
   @Get('security')
   security(@Query() value: SecurityQueryDto) {
     return this.querySrv.securities(value);
+  }
+
+  /** 证券联想（关键字栏位 / K 线代码栏位的候选，最多 12 条） */
+  @Get('security/suggest')
+  suggest(@Query() value: SecuritySuggestQueryDto) {
+    return this.querySrv.suggest(value);
   }
 
   /** 交易日历（一次整年，只返回存在的行） */

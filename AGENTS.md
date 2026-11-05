@@ -229,6 +229,17 @@
      而前一天 3855 行 = 65535 恰好在线上，所以历史数据全都写进去了、只有这一天开始必然失败。
      因此**所有 `Repository.upsert` 一律走 `SyncService.upsertInChunks`**（默认预算 30000 个参数，按实体列数折算每块行数），
      不要再写成一次性全量；按交易日同步是一次写全市场（5000+ 行/天），上游没有分页可依赖。
+  11. **浏览页的联想是独立接口**（`GET data/security/suggest?keyword=`，2026-11-05）：证券页关键字栏与 K 线页代码栏共用它。
+     与列表接口刻意分开 —— 联想是「每敲一键查一次」，只需要 4 列、`LIMIT 12`、**不做 `count(*)`**；
+     列表接口要分页总数与 `marketTotal`，两者合并会让每次按键都多算两遍全表。
+     排序必须**在 SQL 里分级**（代码精确 → 代码/六位数字前缀 → 名称前缀 → 名称包含 → 同档在市优先 + 代码升序），
+     不能在 JS 里对「取回的前 N 行」重排：`%600%` 这类输入命中上千条，先截断再排序等于按代码序随机取 12 条。
+     用户输入进 ILIKE 前要**转义 `%` / `_` / `\`**（`likeContains` / `likePrefix`），否则敲一个 `%` 就把全表捞出来。
+  12. **`@Query()` 的数值参数必须在 DTO 上用 `@Transform` 显式转 number**：全局管道是
+     `ValidationPipe(VALIDATION_PIPE_OPTIONS)`（`apps/api/validation.options.ts`，`whitelist + transform`），
+     查询串里的值全是字符串，`@IsInt()` 只认 number —— 只开 `whitelist` 时，带 `page`/`size` 的请求会**恒 400**
+     （`page must be an integer number`，证券页一打开就红，2026-11-05 实测）。刻意**不开** `enableImplicitConversion`：
+     `Boolean('false') === true`，会把所有 `@IsBoolean()` 开关字段静默改成开启。`app.pipe.spec.ts` 钉住了这条口径。
 - **`@shared` 路径别名**：根 `tsconfig.json` 的 `paths` 声明 `@shared` → `apps/api/shared/index.ts`、`@shared/*` → `apps/api/shared/*`。
   `shared/` **之外**的代码（`app.module.ts` 等）用 `import { SharedModule } from '@shared'` 或 `@shared/<目录>/<文件>.js`；
   `shared/` **内部**仍用相对路径（保持目录可整体搬迁，也不引入循环依赖风险）。

@@ -1,7 +1,7 @@
 // 外部依赖
 import { describe, expect, it, vi } from 'vitest';
 // 内部依赖
-import { DataQueryService } from './query.service.js';
+import { DataQueryService, likeContains, likePrefix } from './query.service.js';
 import type { Repository } from 'typeorm';
 
 /** 构造一个带 mock query builder 的 repository */
@@ -178,5 +178,77 @@ describe('DataQueryService', () => {
     const svc = new DataQueryService(securityRepo, mockRepo(), mockRepo());
     await svc.securities({ sort: 'ListDateDesc' });
     expect(qb.orderBy).toHaveBeenCalledWith('s.listDate', 'DESC', 'NULLS LAST');
+  });
+
+  /** 联想取数用的 query builder 替身 */
+  function mockSuggestQb(rows: unknown[] = []) {
+    const qb = {
+      select: vi.fn(() => qb),
+      where: vi.fn(() => qb),
+      setParameter: vi.fn(() => qb),
+      orderBy: vi.fn(() => qb),
+      addOrderBy: vi.fn(() => qb),
+      limit: vi.fn(() => qb),
+      getMany: vi.fn(async () => rows),
+    };
+    return qb;
+  }
+
+  it('suggest 空关键字直接返回空列表（不查库）', async () => {
+    const createQueryBuilder = vi.fn();
+    const securityRepo = mockRepo({ createQueryBuilder });
+    const svc = new DataQueryService(securityRepo, mockRepo(), mockRepo());
+
+    expect(await svc.suggest({ keyword: '   ' })).toEqual([]);
+    expect(await svc.suggest({})).toEqual([]);
+    expect(createQueryBuilder).not.toHaveBeenCalled();
+  });
+
+  it('suggest 只取 4 列、限 12 条，并按四档排序（代码精确 > 代码/六位数字前缀 > 名称前缀 > 名称包含）', async () => {
+    const qb = mockSuggestQb([
+      { code: 'sh.600000', name: '浦发银行', type: 'Stock', market: 'Shanghai' },
+    ]);
+    const securityRepo = mockRepo({ createQueryBuilder: vi.fn(() => qb) });
+    const svc = new DataQueryService(securityRepo, mockRepo(), mockRepo());
+
+    const result = await svc.suggest({ keyword: ' 600000 ' });
+
+    // 只下发展示需要的列（列表页是 7 列，联想不需要上市/退市日期与状态）
+    expect(qb.select).toHaveBeenCalledWith(['s.code', 's.name', 's.type', 's.market']);
+    // 关键字先去空白，再按「包含」匹配代码与名称
+    expect(qb.where).toHaveBeenCalledWith('(s.code ILIKE :kw OR s.name ILIKE :kw)', {
+      kw: '%600000%',
+    });
+    expect(qb.setParameter).toHaveBeenCalledWith('prefix', '600000%');
+    expect(qb.setParameter).toHaveBeenCalledWith('exact', '600000');
+
+    const [rankSql, order] = qb.orderBy.mock.calls[0] as [string, string];
+    expect(order).toBe('ASC');
+    // 四档顺序：精确 = 0、前缀 = 1、名称前缀 = 2、其余 = 3
+    expect(rankSql).toContain('WHEN LOWER(s.code) = :exact THEN 0');
+    expect(rankSql).toContain("split_part(s.code, '.', 2) ILIKE :prefix THEN 1");
+    expect(rankSql).toContain('WHEN s.name ILIKE :prefix THEN 2');
+    expect(rankSql).toContain('ELSE 3');
+
+    // 同档内：在市在前、其次代码升序（保证同样输入永远同样顺序）
+    expect(qb.addOrderBy).toHaveBeenNthCalledWith(
+      1,
+      "CASE WHEN s.status = 'Listed' THEN 0 ELSE 1 END",
+      'ASC',
+    );
+    expect(qb.addOrderBy).toHaveBeenNthCalledWith(2, 's.code', 'ASC');
+    expect(qb.limit).toHaveBeenCalledWith(12);
+
+    expect(result).toEqual([
+      { code: 'sh.600000', name: '浦发银行', type: 'Stock', market: 'Shanghai' },
+    ]);
+  });
+
+  it('likeContains / likePrefix 转义 % 与 _（否则一个 % 就能捞全表）', () => {
+    expect(likeContains('100%')).toBe('%100\\%%');
+    expect(likePrefix('a_b')).toBe('a\\_b%');
+    // 反斜杠自身也要转义，否则会吃掉后一个字符
+    expect(likeContains('c\\d')).toBe('%c\\\\d%');
+    expect(likePrefix('平安')).toBe('平安%');
   });
 });

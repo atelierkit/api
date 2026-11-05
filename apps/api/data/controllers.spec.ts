@@ -37,6 +37,14 @@ describe('DataQueryController', () => {
     expect(querySrv.securities).toHaveBeenCalledWith(dto);
   });
 
+  it('suggest 转发 querySrv.suggest', () => {
+    const querySrv = { suggest: vi.fn(async () => []) };
+    const ctrl = new DataQueryController(querySrv as never);
+    const dto = { keyword: '600' };
+    void ctrl.suggest(dto as never);
+    expect(querySrv.suggest).toHaveBeenCalledWith(dto);
+  });
+
   it('calendar 转发 querySrv.calendar', () => {
     const querySrv = { calendar: vi.fn(async () => []) };
     const ctrl = new DataQueryController(querySrv as never);

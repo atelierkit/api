@@ -17,6 +17,7 @@ import { AuthModule } from './auth/auth.module.js';
 import { CloudModule } from './cloud/cloud.module.js';
 import { DataModule } from './data/data.module.js';
 import { TencentModule } from './tencent/tencent.module.js';
+import { VALIDATION_PIPE_OPTIONS } from './validation.options.js';
 
 /** 主模块 */
 @Module({
@@ -97,7 +98,7 @@ import { TencentModule } from './tencent/tencent.module.js';
     { provide: APP_FILTER, useClass: RetryAfterFilter },
     { provide: APP_FILTER, useClass: DbErrorFilter },
     { provide: APP_INTERCEPTOR, useClass: ReqInterceptor },
-    { provide: APP_PIPE, useValue: new ValidationPipe({ whitelist: true }) },
+    { provide: APP_PIPE, useValue: new ValidationPipe(VALIDATION_PIPE_OPTIONS) },
   ],
 })
 export class AppModule {}

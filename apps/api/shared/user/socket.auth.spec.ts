@@ -37,9 +37,16 @@ function servicesOf(
   token: unknown = { id: '7' },
   user: unknown = { id: 7, username: 'marbl', status: true, roles: ['admin'] },
 ) {
+  // 注：mock 单独留引用，避免断言时引用「未绑定的方法」触发 unbound-method 告警
+  /** 令牌查询 */
+  const tokenShow = vi.fn(async () => token);
+  /** 用户查询 */
+  const userShow = vi.fn(async () => user);
   return {
-    tokenSrv: { show: vi.fn(async () => token) } as unknown as TokenService,
-    userSrv: { show: vi.fn(async () => user) } as unknown as UserService,
+    tokenSrv: { show: tokenShow } as unknown as TokenService,
+    userSrv: { show: userShow } as unknown as UserService,
+    tokenShow,
+    userShow,
   };
 }
 
@@ -126,5 +133,33 @@ describe('socketIdentityOf', () => {
       servicesOf(undefined, { id: 7, status: true }).userSrv,
     );
     expect(result).toMatchObject({ ok: false, reason: 'not-admin' });
+  });
+
+  it('同一条连接并发校验时只真跑一次（握手与 open 会撞在一起）', async () => {
+    /** socket */
+    const socket = socketOf();
+    /** 服务 */
+    const services = servicesOf();
+    /** 两路同时发起，注：模拟 handleConnection 与 open 并发 */
+    const results = await Promise.all([
+      socketIdentityOf(socket, services.tokenSrv, services.userSrv),
+      socketIdentityOf(socket, services.tokenSrv, services.userSrv),
+    ]);
+    expect(results[0]).toEqual(results[1]);
+    expect(results[0]).toMatchObject({ ok: true, userId: 7 });
+    // 注：两次调用只该花一次令牌查询 + 一次用户查询
+    expect(services.tokenShow).toHaveBeenCalledTimes(1);
+    expect(services.userShow).toHaveBeenCalledTimes(1);
+  });
+
+  it('失败结果同样复用，不会因第二次调用而变成通过', async () => {
+    /** socket */
+    const socket = socketOf();
+    /** 服务 */
+    const services = servicesOf(null);
+    const first = await socketIdentityOf(socket, services.tokenSrv, services.userSrv);
+    const second = await socketIdentityOf(socket, services.tokenSrv, services.userSrv);
+    expect(first).toMatchObject({ ok: false, reason: 'token-invalid' });
+    expect(second).toEqual(first);
   });
 });

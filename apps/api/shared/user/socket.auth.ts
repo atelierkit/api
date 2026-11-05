@@ -26,10 +26,17 @@ export const SOCKET_AUTH_MESSAGES: Record<SocketAuthFailure, string> = {
   'not-admin': '没有被授权访问该功能！',
 };
 
-/** 握手鉴权结果 */
+/** 鉴权结果 */
 export type SocketAuthResult =
   | { ok: true; userId: number; username: string }
   | { ok: false; reason: SocketAuthFailure; message: string };
+
+/**
+ * 缓存在 `socket.data` 上的鉴权任务键
+ *
+ * 注：用字符串键而不是 Symbol —— `socket.data` 会跟着适配器走，字符串更便于调试时查看
+ */
+const AUTH_TASK_KEY = 'authTask';
 
 /**
  * 校验 WebSocket 连接的登录状态与角色
@@ -40,6 +47,9 @@ export type SocketAuthResult =
  * 同时兜住 `headers.token`（少数客户端会塞在这里）
  * 注 3：校验通过时**顺手把身份写到 `socket.data`** —— 业务事件都靠它判断「这条连接属于谁」，
  * 让每个调用方各写一遍容易漏
+ * 注 4：**同一条连接只真正校验一次**，后续调用复用同一个 Promise —— 握手（`handleConnection`）
+ * 与业务事件（如 `open`）是并发的：两次 await 令牌与用户（各一次 Redis / DB 查询）期间，
+ * 业务事件读到的 `socket.data.userId` 还是空的 ⇒ 表现为「刚连上就提示登录状态无效」
  *
  * @param socket 连接
  * @param tokenSrv 令牌服务
@@ -47,6 +57,33 @@ export type SocketAuthResult =
  * @returns 校验结果，注：失败时调用方负责 emit 错误并断开
  */
 export async function socketIdentityOf(
+  socket: Socket,
+  tokenSrv: TokenService,
+  userSrv: UserService,
+): Promise<SocketAuthResult> {
+  /** 已在进行中的鉴权任务 */
+  const running = socket.data[AUTH_TASK_KEY] as
+    | Promise<SocketAuthResult>
+    | undefined;
+  if (running !== undefined) {
+    return running;
+  }
+  // 注：**先写缓存再 await** —— 否则并发的第二路调用会看到空值，又发起一次校验
+  /** 本次鉴权任务 */
+  const task = verifySocketIdentity(socket, tokenSrv, userSrv);
+  socket.data[AUTH_TASK_KEY] = task;
+  return task;
+}
+
+/**
+ * 真正执行校验（不做缓存）
+ *
+ * @param socket 连接
+ * @param tokenSrv 令牌服务
+ * @param userSrv 用户服务
+ * @returns 校验结果
+ */
+async function verifySocketIdentity(
   socket: Socket,
   tokenSrv: TokenService,
   userSrv: UserService,

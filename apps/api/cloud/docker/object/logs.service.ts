@@ -55,6 +55,37 @@ export interface DockerLogStream {
 }
 
 /**
+ * 把起始时刻规范成 daemon 认识的 `since` 值
+ *
+ * 注 1：**不能直接传日志行里的时间戳** —— 实测工控机的 daemon（28.x）只接受纯数字时间戳，
+ * 任何 RFC3339 形式（含 `2026-11-05T01:57:07Z`）都回 400
+ * `invalid value for "since": … invalid seconds "2026-11-05T01:57:07": invalid syntax`
+ * 注 2：数字还必须是 **Unix 秒**：传 19 位纳秒不会报错，但会被当成「秒」⇒ 变成几亿年后的未来，
+ * 流里一行都不返回（实测 0 字节，只有换算成 10 位秒才有数据）
+ * 注 3：退到秒只会让「最后一秒内的行」重传一次，前端按时间戳去重（`mergeOf`）能吃掉
+ *
+ * @param value 原始值，注：可能是 Unix 秒，也可能是 RFC3339（带或不带小数秒）
+ * @returns 可直接拼进查询串的值；无法识别时返回空串（表示不用 since）
+ */
+export function sinceParamOf(value: string | undefined): string {
+  /** 去掉空白后的原文 */
+  const raw = typeof value === 'string' ? value.trim() : '';
+  if (raw === '') {
+    return '';
+  }
+  // 已经是纯数字：按 Unix 秒原样传，注：纳秒宽度（>10 位）会被 daemon 误读，故不接受
+  if (/^\d{1,10}$/.test(raw)) {
+    return raw;
+  }
+  /** 解析出的毫秒 */
+  const at = Date.parse(raw);
+  if (Number.isNaN(at)) {
+    return '';
+  }
+  return `${Math.floor(at / 1000)}`;
+}
+
+/**
  * 拼日志接口的路径
  *
  * 注：`stdout` / `stderr` 固定都开，前端按流过滤 —— 做成 DTO 字段会让「只看 stderr」
@@ -77,8 +108,10 @@ export function logsPathOf(
     `tail=${tailOf(query.tail, follow ? 0 : DOCKER_LOG_TAIL_DEFAULT)}`,
     `timestamps=${query.timestamps === false ? 0 : 1}`,
   ];
-  if (query.since) {
-    parts.push(`since=${encodeURIComponent(query.since)}`);
+  /** 起始时刻 */
+  const since = sinceParamOf(query.since);
+  if (since !== '') {
+    parts.push(`since=${since}`);
   }
   if (follow) {
     parts.push('follow=1');
@@ -149,24 +182,30 @@ export class DockerLogsService {
   }
 
   /**
-   * 打开跟随流
+   * 打开日志流
+   *
+   * ⚠ `follow` **必须由调用方显式声明**：快照与跟随共用本方法，而 `follow=1` 是永不结束的响应 ——
+   * 若快照也带上它，`for await` 永远读不到结尾，前端会一直停在「正在加载日志…」（且占着一条
+   * 到宿主机的连接，直到静默超时）。故这里不用「缺省跟随」，缺省是快照口径
    *
    * @param dockerId 宿主机ID
    * @param id 容器ID
    * @param query 查询参数
+   * @param follow 是否持续跟随，注：缺省 false（读完历史即结束）
    * @returns 已建立的流，注：调用方负责消费与释放
    */
   async open(
     dockerId: number,
     id: string,
     query: DockerLogQuery = {},
+    follow = false,
   ): Promise<DockerLogStream> {
     /** 连接参数 */
     const target = await this.dockerSrv.target(dockerId);
     /** 是否 TTY */
     const tty = await this.ttyOf(target, id);
     /** 流句柄 */
-    const handle = await dockerStream(target, logsPathOf(id, query, true), {
+    const handle = await dockerStream(target, logsPathOf(id, query, follow), {
       // 注：首字节沿用默认 15 秒（容器不存在 / 宿主机不可达要尽快失败），静默超时用长值
       timeout: DOCKER_TIMEOUT,
     });

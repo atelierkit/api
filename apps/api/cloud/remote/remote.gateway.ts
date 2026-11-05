@@ -166,9 +166,21 @@ export class RemoteGateway implements OnGatewayDisconnect {
     @MessageBody() body: { ticket?: string } | undefined,
   ): Promise<{ sessionId: string } | { code: RemoteErrorCode; message: string }> {
     /** 用户ID */
-    const userId = Number(socket.data['userId']) || 0;
+    let userId = Number(socket.data['userId']) || 0;
     if (userId === 0) {
-      return this.failure('TICKET_MISMATCH', '登录状态无效，请重新登录后再连接！');
+      // 注：`open` 常与握手的异步鉴权并发（客户端连上就发），此处必须等它写完 `socket.data`，
+      // 否则会出现「刚连上就提示登录状态无效」；同一连接只会真正校验一次
+      /** 校验结果 */
+      const identity = await socketIdentityOf(socket, this.tokenSrv, this.userSrv);
+      if (!identity.ok) {
+        return this.failure(
+          'TICKET_MISMATCH',
+          identity.reason === 'not-admin'
+            ? '没有被授权访问终端！'
+            : identity.message,
+        );
+      }
+      userId = identity.userId;
     }
     if (this.sessionSrv.find(socket.id) !== undefined) {
       return this.failure('LIMIT_EXCEEDED', '当前连接已有一个终端会话，请勿重复打开！');

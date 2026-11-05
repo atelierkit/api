@@ -185,17 +185,45 @@ describe('DockerLogGateway · open', () => {
       containerId: 'abc',
     });
     expect(result).toEqual({ sessionId: 's1' });
-    expect(logsSrv.open).toHaveBeenCalledWith(3, 'abc', {
-      tail: 0,
-      since: '',
-      timestamps: true,
-    });
+    expect(logsSrv.open).toHaveBeenCalledWith(
+      3,
+      'abc',
+      {
+        tail: 0,
+        since: '',
+        timestamps: true,
+      },
+      // 注：第 4 个参数是 follow —— 不传就成了快照口径，读完历史即 EOF
+      true,
+    );
     gateway.handleDisconnect(asSocket(socket));
   });
 
-  it('未鉴权的连接直接拒绝（纵深防御，握手阶段已断开）', async () => {
-    /** 网关 */
-    const { gateway } = gatewayOf();
+  it('握手鉴权尚未写完 socket.data 时，open 等它（否则刚连上就报登录状态无效）', async () => {
+    /** 网关与替身 */
+    const { gateway, logsSrv, tokenSrv } = gatewayOf();
+    // 注：让令牌查询慢一拍，模拟真实的异步窗口（客户端连上立刻发 open）
+    tokenSrv.show.mockImplementation(
+      async () => (await Promise.resolve({ id: '7' })) as never,
+    );
+    /** socket，注：data 为空 = 握手鉴权还没跑完 */
+    const socket = socketOf();
+    socket.data = {};
+    /** 结果 */
+    const result = await gateway.open(asSocket(socket), {
+      dockerId: 3,
+      containerId: 'abc',
+    });
+    expect(result).toEqual({ sessionId: 's1' });
+    expect(socket.data['userId']).toBe(7);
+    expect(logsSrv.open).toHaveBeenCalledTimes(1);
+    gateway.handleDisconnect(asSocket(socket));
+  });
+
+  it('握手鉴权失败时拒绝，且不打开流', async () => {
+    /** 网关与替身 */
+    const { gateway, logsSrv, tokenSrv } = gatewayOf();
+    tokenSrv.show.mockResolvedValue(null as never);
     /** socket */
     const socket = socketOf();
     socket.data = {};
@@ -205,6 +233,7 @@ describe('DockerLogGateway · open', () => {
       code: 'UNAUTHORIZED',
       message: expect.stringContaining('登录'),
     });
+    expect(logsSrv.open).not.toHaveBeenCalled();
   });
 
   it('同一连接重复 open 被拒', async () => {

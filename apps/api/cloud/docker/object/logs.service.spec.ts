@@ -117,14 +117,29 @@ describe('logsPathOf', () => {
     expect(logsPathOf('abc', {}, true)).toContain('follow=1');
   });
 
-  it('since 会被编码，timestamps 可关', () => {
-    /** 路径 */
-    const path = logsPathOf('abc', {
-      since: '2026-11-04T00:00:00Z',
-      timestamps: false,
-    });
-    expect(path).toContain('since=2026-11-04T00%3A00%3A00Z');
-    expect(path).toContain('timestamps=0');
+  it('since 转成 Unix 秒（daemon 只认 10 位数字，RFC3339 会 400）', () => {
+    // 注：实测工控机的 daemon 28.x 对任何 RFC3339 形式都回 400，且 19 位纳秒会被当成秒
+    expect(
+      logsPathOf('abc', { since: '2026-11-05T01:57:07.987702007Z' }),
+    ).toContain('since=1793843827');
+    expect(logsPathOf('abc', { since: '2026-11-05T01:57:07Z' })).toContain(
+      'since=1793843827',
+    );
+    // 已经是 Unix 秒的原样传
+    expect(logsPathOf('abc', { since: '1793843827' })).toContain(
+      'since=1793843827',
+    );
+    // 纳秒宽度不原样透传（会被 daemon 误读成未来），按无法识别处理
+    expect(logsPathOf('abc', { since: '1793843827987702007' })).not.toContain(
+      'since=',
+    );
+    // 认不出来就不带该参数（等于不限），而不是把脏值丢给 daemon
+    expect(logsPathOf('abc', { since: '不是时间' })).not.toContain('since=');
+    expect(logsPathOf('abc', { since: '' })).not.toContain('since=');
+  });
+
+  it('timestamps 可关', () => {
+    expect(logsPathOf('abc', { timestamps: false })).toContain('timestamps=0');
   });
 
   it('容器 ID 会被编码（挡住路径穿越）', () => {
@@ -203,17 +218,31 @@ describe('DockerLogsService.snapshot', () => {
     await serviceOf().snapshot(1, 'abc', { tail: 10 });
     expect(paths.every((path) => path.startsWith('/v1.47/'))).toBe(true);
   });
+
+  it('快照请求不带 follow（带上会一直读不到结尾，界面停在「正在加载日志…」）', async () => {
+    await serviceOf().snapshot(1, 'abc', { tail: 10 });
+    expect(paths.some((path) => path.includes('/logs?'))).toBe(true);
+    expect(paths.some((path) => path.includes('follow=1'))).toBe(false);
+  });
 });
 
 describe('DockerLogsService.open', () => {
-  it('返回解析器与 TTY 信息，且 tail=0 + follow=1', async () => {
+  it('显式跟随时才带 follow=1，且 tail=0', async () => {
     /** 日志流 */
-    const stream = await serviceOf().open(1, 'abc', {});
+    const stream = await serviceOf().open(1, 'abc', {}, true);
     expect(stream.tty).toBe(false);
     expect(paths.some((path) => path.includes('follow=1') && path.includes('tail=0'))).toBe(
       true,
     );
     // 注：必须主动释放，否则假 daemon 的连接会挂到静默超时
+    stream.handle.abort();
+  });
+
+  it('缺省是快照口径（不带 follow），否则快照永远读不到结尾', async () => {
+    /** 日志流 */
+    const stream = await serviceOf().open(1, 'abc', { tail: 10 });
+    expect(paths.some((path) => path.includes('follow=1'))).toBe(false);
+    expect(paths.some((path) => path.includes('tail=10'))).toBe(true);
     stream.handle.abort();
   });
 });

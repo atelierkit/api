@@ -214,14 +214,27 @@ describe('打开终端', () => {
     return sessionSrv.issue(7, 3, { cols: 120, rows: 40 }).ticket;
   }
 
-  it('未通过握手鉴权时拒绝', async () => {
-    /** 被测网关 */
-    const { gateway } = gatewayOf();
+  it('握手鉴权尚未写完 socket.data 时，open 等它（否则刚连上就报登录状态无效）', async () => {
+    /** 被测网关与替身 */
+    const { gateway, sessionSrv } = gatewayOf();
+    /** socket，注：data 为空 = 握手鉴权还没跑完 */
+    const socket = socketOf();
+    expect(await gateway.open(socket as never, { ticket: ticketOf(sessionSrv) })).toEqual({
+      sessionId: 'sock-1',
+    });
+  });
+
+  it('握手鉴权失败时拒绝，不建连', async () => {
+    /** 被测网关与替身 */
+    const { gateway, tokenSrv, sshSrv } = gatewayOf();
+    tokenSrv.show.mockResolvedValue(null as never);
     /** socket */
     const socket = socketOf();
-    expect(await gateway.open(socket as never, { ticket: 'x' })).toMatchObject({
+    expect(await gateway.open(socket as never, { ticket: 'x' })).toEqual({
       code: 'TICKET_MISMATCH',
+      message: expect.stringContaining('登录'),
     });
+    expect(sshSrv.open).not.toHaveBeenCalled();
   });
 
   it('票据有效时建连、登记会话，并回写首连指纹（TOFU）', async () => {

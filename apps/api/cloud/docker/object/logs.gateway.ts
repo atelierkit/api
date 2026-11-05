@@ -155,9 +155,22 @@ export class DockerLogGateway implements OnGatewayDisconnect {
     body: { dockerId?: unknown; containerId?: unknown; tail?: unknown; since?: unknown } | undefined,
   ): Promise<DockerLogOpenResult> {
     /** 用户ID */
-    const userId = Number(socket.data['userId']) || 0;
+    let userId = Number(socket.data['userId']) || 0;
     if (userId === 0) {
-      return this.failure('UNAUTHORIZED', '登录状态无效，请重新登录后再连接！');
+      // 注：客户端在 `connect` 后立刻发 `open`，而握手的鉴权是异步的（令牌 + 用户各查一次），
+      // 常常还没写完 `socket.data` ⇒ 这里必须等它，否则「刚连上就报登录状态无效」
+      // （`socketIdentityOf` 对同一连接只真跑一次，握手那边已经在跑就复用同一个 Promise）
+      /** 校验结果 */
+      const identity = await socketIdentityOf(socket, this.tokenSrv, this.userSrv);
+      if (!identity.ok) {
+        return this.failure(
+          'UNAUTHORIZED',
+          identity.reason === 'not-admin'
+            ? '没有被授权查看容器日志！'
+            : identity.message,
+        );
+      }
+      userId = identity.userId;
     }
     if (this.sessions.has(socket.id)) {
       return this.failure(
@@ -201,13 +214,19 @@ export class DockerLogGateway implements OnGatewayDisconnect {
     /** 日志流 */
     let stream: DockerLogStream;
     try {
-      stream = await this.logsSrv.open(dockerId, containerId, {
-        // 注：跟随的缺省 tail 是 0 —— 历史由快照接口给，这里只要新行
-        tail: tailOf(body?.tail, 0),
-        since,
-        // 注：必须带时间戳，前端要靠它做重连后的去重
-        timestamps: true,
-      });
+      stream = await this.logsSrv.open(
+        dockerId,
+        containerId,
+        {
+          // 注：跟随的缺省 tail 是 0 —— 历史由快照接口给，这里只要新行
+          tail: tailOf(body?.tail, 0),
+          since,
+          // 注：必须带时间戳，前端要靠它做重连后的去重
+          timestamps: true,
+        },
+        // 注：必须显式跟随，否则会在读完历史后 EOF，抽屉立刻提示「容器可能已停止」
+        true,
+      );
     } catch (err) {
       /** 异常状态码 */
       const status = (err as { status?: number })?.status ?? 0;

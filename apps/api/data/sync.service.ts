@@ -30,6 +30,8 @@ import {
   TERMINAL_STATES,
   type SyncTarget,
 } from './sync/sync.types.js';
+import { dailyCatchUpPlanDate, shouldScheduleDailyCatchUp } from './sync/daily-catch-up.js';
+import type { TradeDayWindow } from './sync/daily-window.js';
 import type { Watermark } from './sync/watermark.js';
 import { syncBarByDate } from './sync/bar-by-date.syncer.js';
 import { syncAdjustFactor } from './sync/adjust-factor.syncer.js';
@@ -38,6 +40,12 @@ import { syncCalendar } from './sync/calendar.syncer.js';
 import type { ProgressReport } from './sync/progress.js';
 import type { SyncResult } from './sync/daily-batch.js';
 import { chunkRows, paramsPerRowOf } from './sync/write-chunk.js';
+
+/** 定时补更的巡检间隔（毫秒）：5 分钟一次，够细到「当天必然补上」，又不至于压数据库 */
+const CATCH_UP_TICK_MS = 5 * 60 * 1000;
+
+/** 需要定时补更的数据类型（按交易日、全市场） */
+const CATCH_UP_TARGETS: SyncTarget[] = [SYNC_TARGET.BAR_BY_DATE, SYNC_TARGET.ADJUST_FACTOR];
 
 /**
  * 行情数据同步服务：入队 / 暂停 / 快照 + 进程内消费段
@@ -57,6 +65,12 @@ export class SyncService implements OnApplicationBootstrap, OnModuleDestroy {
   private stopping = false;
   /** 进度写库的串行尾（见 makeProgress 注释） */
   private progressTail: Promise<void> = Promise.resolve();
+  /** 定时补更巡检定时器 */
+  private catchUpTimer: ReturnType<typeof setInterval> | null = null;
+  /** 补更巡检是否在跑（防重入：上一次可能还没查完） */
+  private catchUpBusy = false;
+  /** 日历未覆盖今天的告警去重标记（按业务日） */
+  private calendarWarnDate = '';
 
   private readonly client = new BaostockClient();
 
@@ -90,10 +104,15 @@ export class SyncService implements OnApplicationBootstrap, OnModuleDestroy {
       this.logger.warn(`启动对账：${zombies.affected} 条执行中记录回滚为排队。`);
     }
     this.wake();
+    this.startDailyCatchUp();
   }
 
   onModuleDestroy(): void {
     this.stopping = true;
+    if (this.catchUpTimer !== null) {
+      clearInterval(this.catchUpTimer);
+      this.catchUpTimer = null;
+    }
     void this.client.logout();
   }
 
@@ -268,13 +287,7 @@ export class SyncService implements OnApplicationBootstrap, OnModuleDestroy {
       countRows,
       shouldAbort: () => this.isAborted(runId),
       warn: (message: string) => this.logger.warn(message),
-      latestCalendarDate: async () => {
-        const latest = await this.calendarRepo
-          .createQueryBuilder('c')
-          .select('MAX(c.calendarDate)', 'max')
-          .getRawOne<{ max: string | null }>();
-        return latest?.max ?? null;
-      },
+      latestCalendarDate: () => this.latestCalendarDate(),
       calendarRange: async (from: string, to: string) => {
         const rows = await this.calendarRepo
           .createQueryBuilder('c')
@@ -461,19 +474,57 @@ export class SyncService implements OnApplicationBootstrap, OnModuleDestroy {
     return now.toISOString().slice(0, 10);
   }
 
+  /** 业务时区当前小时（0-23）：判定「当天数据是否已发布」用 */
+  private nowHour(): number {
+    return new Date(Date.now() + 8 * 3600 * 1000).getUTCHours();
+  }
+
+  /** 交易日历的覆盖末日（MAX(calendar_date)）；null = 日历为空 */
+  private async latestCalendarDate(): Promise<string | null> {
+    const latest = await this.calendarRepo
+      .createQueryBuilder('c')
+      .select('MAX(c.calendarDate)', 'max')
+      .getRawOne<{ max: string | null }>();
+    return latest?.max ?? null;
+  }
+
+  /**
+   * 交易日历窗口：今天是否开市 + 严格早于今天的最近一个开市日
+   *
+   * @param today 业务日（YYYY-MM-DD）
+   */
+  private async tradeDayWindow(today: string): Promise<TradeDayWindow> {
+    const todayRow = await this.calendarRepo.findOneBy({ calendarDate: today });
+    const previous = await this.calendarRepo
+      .createQueryBuilder('c')
+      .select('MAX(c.calendarDate)', 'max')
+      .where('c.calendarDate < :today AND c.isOpen = true', { today })
+      .getRawOne<{ max: string | null }>();
+
+    return {
+      todayIsOpen: todayRow?.isOpen === true,
+      previousOpenDay: previous?.max ?? null,
+    };
+  }
+
   // ── 对外接口（控制器调用）───────────────────────────────────────────────
 
-  /** 入队（从台账断点续） */
+  /**
+   * 入队（从台账断点续）
+   *
+   * ⚠ 手动同步**不**强制含当天：交易日 19:00 前上界停在前一交易日（当天数据源尚未发布），
+   * 当天由每日 20:00 的定时补更（`startDailyCatchUp`）负责。
+   */
   async start(target: SyncTarget): Promise<{ enqueued: number; blocked: number; note: string }> {
-    const request: SyncRequest = {
-      target,
-      codes: [],
-      from: null,
-      to: null,
-    };
-    const option: SyncStartOption = { source: 'manual', plan: '' };
+    return this.enqueueRequest(
+      { target, codes: [], from: null, to: null },
+      { source: 'manual', plan: '' },
+    );
+  }
 
-    const svc = new SyncPlanService({
+  /** 组装展开器（真实仓储实现） */
+  private createPlanner(): SyncPlanService {
+    return new SyncPlanService({
       earliestCalendarDate: async () => {
         const earliest = await this.calendarRepo
           .createQueryBuilder('c')
@@ -522,16 +573,29 @@ export class SyncService implements OnApplicationBootstrap, OnModuleDestroy {
             );
             enqueuedIds.push(Number(saved.id));
           } catch {
-            // 被部分唯一索引挡下（同一任务已有活跃执行）
+            // 被部分唯一索引挡下（同一任务已有活跃执行 / 同一任务同一天已排过）
             blocked++;
           }
         }
         return { enqueuedIds, blocked };
       },
       today: () => this.today(),
+      hourOfDay: () => this.nowHour(),
+      tradeDayWindow: (today) => this.tradeDayWindow(today),
     });
+  }
 
-    const result = await svc.plan(request, option);
+  /**
+   * 展开并入队，成功后唤醒消费
+   *
+   * @param request 同步请求
+   * @param option 触发来源与计划标记
+   */
+  private async enqueueRequest(
+    request: SyncRequest,
+    option: SyncStartOption,
+  ): Promise<{ enqueued: number; blocked: number; note: string }> {
+    const result = await this.createPlanner().plan(request, option);
     if ('error' in result) {
       throw new BadRequestException(result.error.message);
     }
@@ -544,6 +608,86 @@ export class SyncService implements OnApplicationBootstrap, OnModuleDestroy {
       blocked: result.plan.blocked,
       note: result.plan.note,
     };
+  }
+
+  /**
+   * 启动每日补更巡检
+   *
+   * ⚠ 用巡检而不是「算准 20:00 的 setTimeout」：进程在 20:00 那一刻重启 / 停机再上线，
+   * 一次性定时器就永远错过了；巡检只要「今天已过 20:00 且今天还没排过」就补上。
+   * ⚠ `unref()`：不让这个定时器阻止进程退出（测试与优雅停机都要能走干净）。
+   */
+  private startDailyCatchUp(): void {
+    if (this.catchUpTimer !== null) {
+      return;
+    }
+    this.catchUpTimer = setInterval(() => {
+      void this.dailyCatchUpTick();
+    }, CATCH_UP_TICK_MS);
+    this.catchUpTimer.unref();
+    // 启动即巡检一次：20:00 之后才重启的进程不必等到下一个 5 分钟
+    void this.dailyCatchUpTick();
+  }
+
+  /**
+   * 一次补更巡检
+   *
+   * 判定顺序：日历是否覆盖今天 → 今天是否开市 → 是否已过 20:00 → 今天是否已排过。
+   * 任一不满足即跳过该类型；两个类型各自独立判断（复权因子与日 K 的台账互不影响）。
+   */
+  private async dailyCatchUpTick(): Promise<void> {
+    if (this.stopping || this.catchUpBusy) {
+      return;
+    }
+    this.catchUpBusy = true;
+
+    try {
+      const today = this.today();
+      const hour = this.nowHour();
+      const calendarLatest = await this.latestCalendarDate();
+
+      // 日历没覆盖到今天 ⇒ 无法判定是否交易日（日历过期时静默跳过最危险，留一条告警）
+      if (calendarLatest === null || calendarLatest < today) {
+        if (this.calendarWarnDate !== today) {
+          this.calendarWarnDate = today;
+          this.logger.warn(
+            `定时补更跳过：交易日历只覆盖到 ${calendarLatest ?? '（空）'}，没有 ${today} —— 请先同步交易日历。`,
+          );
+        }
+        return;
+      }
+
+      const window = await this.tradeDayWindow(today);
+
+      for (const target of CATCH_UP_TARGETS) {
+        const plan = dailyCatchUpPlanDate(today);
+        const planned = (await this.runRepo.findOneBy({ target, planDate: plan })) !== null;
+        if (!shouldScheduleDailyCatchUp({ hour, todayIsOpen: window.todayIsOpen, alreadyPlanned: planned })) {
+          continue;
+        }
+
+        const result = await this.enqueueRequest(
+          { target, codes: [], from: null, to: null, includeToday: true },
+          { source: 'auto', plan },
+        );
+        if (result.enqueued > 0) {
+          this.logger.log(
+            `定时补更（${today} ${hour}:00）：${displayNameOf(target)} 已排 ${result.enqueued} 条执行。`,
+          );
+        } else {
+          this.logger.warn(
+            `定时补更（${today}）：${displayNameOf(target)} 未能入队（${result.blocked} 条被活跃执行挡下），下次巡检重试。`,
+          );
+        }
+      }
+    } catch (err) {
+      // 巡检失败不能影响进程：下一次巡检会重试
+      this.logger.warn(
+        `定时补更巡检失败：${err instanceof Error ? err.message : String(err)}`,
+      );
+    } finally {
+      this.catchUpBusy = false;
+    }
   }
 
   /** 暂停该 target 所有 Running 的执行 */

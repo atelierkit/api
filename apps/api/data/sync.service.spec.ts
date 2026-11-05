@@ -12,6 +12,27 @@ function mockRepo(overrides: Record<string, unknown> = {}) {
   return { ...overrides } as never;
 }
 
+/**
+ * 日历仓储的默认替身：空日历
+ *
+ * 定时补更巡检在启动时就会跑一次，未显式提供 calendarRepo 的用例若拿到空对象，
+ * 会走 catch 分支打一条「createQueryBuilder is not a function」的告警 —— 那是测试噪音，
+ * 不是被测行为。空日历让巡检按「日历未覆盖」的既定路径静默返回。
+ */
+function emptyCalendarRepo(): Record<string, unknown> {
+  return {
+    findOneBy: vi.fn(async () => null),
+    createQueryBuilder: vi.fn(() => {
+      const qb = {
+        select: vi.fn(() => qb),
+        where: vi.fn(() => qb),
+        getRawOne: vi.fn(async () => ({ max: null, min: null })),
+      };
+      return qb;
+    }),
+  };
+}
+
 /** 构造 SyncService（注入 mock 依赖） */
 function makeService(deps: {
   coverageRepo?: Record<string, unknown>;
@@ -34,7 +55,7 @@ function makeService(deps: {
     mockRepo(deps.runRepo),
     mockRepo(deps.coverageRepo),
     mockRepo(deps.securityRepo),
-    mockRepo(deps.calendarRepo),
+    mockRepo(deps.calendarRepo ?? emptyCalendarRepo()),
     mockRepo(),
     mockRepo(),
   );
@@ -244,12 +265,27 @@ describe('SyncService', () => {
   });
 
   it('start 入队成功后唤醒并广播', async () => {
-    // 日历最早日期 + 全市场证券代码（BarByDate 不需要证券代码，但需要日历最早日）
+    // 日历替身：MIN 定起点、MAX 定覆盖末日、今天开市 + 前一交易日定「同步上界」
     const calendarRepo = {
+      findOneBy: vi.fn(async () => ({ calendarDate: '2026-11-05', isOpen: true })),
       createQueryBuilder: vi.fn(() => {
         const qb = {
-          select: vi.fn(() => qb),
-          getRawOne: vi.fn(async () => ({ min: '1990-12-19' })),
+          field: '',
+          filtered: false,
+          select: vi.fn((field: string) => {
+            qb.field = field;
+            return qb;
+          }),
+          where: vi.fn(() => {
+            qb.filtered = true;
+            return qb;
+          }),
+          getRawOne: vi.fn(async () => {
+            if (qb.field.startsWith('MIN')) {
+              return { min: '1990-12-19' };
+            }
+            return qb.filtered ? { max: '2026-10-30' } : { max: '2026-11-05' };
+          }),
         };
         return qb;
       }),
@@ -280,6 +316,105 @@ describe('SyncService', () => {
     const result = await svc.start(SYNC_TARGET.BAR_BY_DATE);
     expect(result.enqueued).toBe(1);
     expect(gateway.broadcast).toHaveBeenCalledWith('enqueue');
+  });
+
+  it('定时补更：交易日 20:00 后把当天补进日 K 与复权因子（含当天）', async () => {
+    // 北京时间 2026-11-05 21:00
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date('2026-11-05T13:00:00.000Z'));
+    try {
+      const calendarRepo = {
+        findOneBy: vi.fn(async () => ({ calendarDate: '2026-11-05', isOpen: true })),
+        createQueryBuilder: vi.fn(() => {
+          const qb = {
+            field: '',
+            filtered: false,
+            select: vi.fn((field: string) => {
+              qb.field = field;
+              return qb;
+            }),
+            where: vi.fn(() => {
+              qb.filtered = true;
+              return qb;
+            }),
+            getRawOne: vi.fn(async () => {
+              if (qb.field.startsWith('MIN')) {
+                return { min: '1990-12-19' };
+              }
+              // 无 where = 日历覆盖末日；带 where = 前一交易日
+              return qb.filtered ? { max: '2026-11-04' } : { max: '2026-11-05' };
+            }),
+          };
+          return qb;
+        }),
+      };
+      const taskRepo = {
+        findOneBy: vi.fn(async () => ({ id: '1' })),
+        save: vi.fn(async (e: unknown) => e),
+        create: vi.fn((e: unknown) => e),
+      };
+      let seq = 0;
+      const runRepo = {
+        // 今天还没排过（查重为空）
+        findOneBy: vi.fn(async () => null),
+        save: vi.fn(async (e: unknown) => ({ ...(e as object), id: String(++seq) })),
+        create: vi.fn((e: unknown) => e),
+      };
+
+      const { svc, gateway } = makeService({ calendarRepo, taskRepo, runRepo });
+      await (
+        svc as unknown as { dailyCatchUpTick: () => Promise<void> }
+      ).dailyCatchUpTick();
+
+      // 日 K 与复权因子各一条，上界都是当天、来源是 auto、plan_date 带日期（幂等标记）
+      expect(runRepo.save).toHaveBeenCalledTimes(2);
+      const created = runRepo.create.mock.calls.map(
+        (call) =>
+          call[0] as { target: string; toDate: string; planDate: string; source: string },
+      );
+      expect(created.map((r) => r.target)).toEqual([
+        SYNC_TARGET.BAR_BY_DATE,
+        SYNC_TARGET.ADJUST_FACTOR,
+      ]);
+      expect(created.map((r) => r.toDate)).toEqual(['2026-11-05', '2026-11-05']);
+      expect(created.map((r) => r.source)).toEqual(['auto', 'auto']);
+      expect(created.map((r) => r.planDate)).toEqual([
+        'auto:daily:2026-11-05',
+        'auto:daily:2026-11-05',
+      ]);
+      expect(gateway.broadcast).toHaveBeenCalledWith('enqueue');
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('定时补更：日历没覆盖到今天时不排、也不抛错', async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date('2026-11-05T13:00:00.000Z'));
+    try {
+      const calendarRepo = {
+        findOneBy: vi.fn(async () => null),
+        createQueryBuilder: vi.fn(() => {
+          const qb = {
+            select: vi.fn(() => qb),
+            where: vi.fn(() => qb),
+            // 日历只覆盖到去年年底
+            getRawOne: vi.fn(async () => ({ max: '2025-12-31' })),
+          };
+          return qb;
+        }),
+      };
+      const runRepo = { findOneBy: vi.fn(async () => null), save: vi.fn(), create: vi.fn() };
+
+      const { svc } = makeService({ calendarRepo, runRepo });
+      await (
+        svc as unknown as { dailyCatchUpTick: () => Promise<void> }
+      ).dailyCatchUpTick();
+
+      expect(runRepo.save).not.toHaveBeenCalled();
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it('executeRun 处理 Security 目标：调用证券同步器并写终态', async () => {

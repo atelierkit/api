@@ -1,7 +1,7 @@
 // 外部依赖
 import { describe, expect, it, vi } from 'vitest';
 // 内部依赖
-import { SyncPlanService, type SyncPlanDeps } from './sync-plan.service.js';
+import { SyncPlanService, type EnqueueRun, type SyncPlanDeps } from './sync-plan.service.js';
 import { SYNC_TARGET } from './sync.types.js';
 import {
   advanceWatermark,
@@ -10,7 +10,7 @@ import {
 import { factUnits, factForDay, factForPage } from './progress.js';
 import { progressUnitOf, coverageScopeOf, isActive, isTerminal } from './sync.types.js';
 
-/** 内存替身 */
+/** 内存替身（默认：今天是交易日、前一交易日为 2026-10-30、时钟 09:00） */
 function makeDeps(overrides: Partial<SyncPlanDeps> = {}): SyncPlanDeps {
   return {
     earliestCalendarDate: async () => '1990-12-19',
@@ -19,6 +19,8 @@ function makeDeps(overrides: Partial<SyncPlanDeps> = {}): SyncPlanDeps {
       new Map(codes.map((code, i) => [code, i + 1])),
     enqueue: async (runs) => ({ enqueuedIds: runs.map((_, i) => i + 1), blocked: 0 }),
     today: () => '2026-10-31',
+    hourOfDay: () => 9,
+    tradeDayWindow: async () => ({ todayIsOpen: true, previousOpenDay: '2026-10-30' }),
     ...overrides,
   };
 }
@@ -123,6 +125,129 @@ describe('SyncPlanService', () => {
     const result = await svc.plan({ target: SYNC_TARGET.BAR, codes: [] });
     expect('plan' in result).toBe(true);
     expect(allStockCodes).toHaveBeenCalled();
+  });
+});
+
+describe('SyncPlanService · 按交易日的同步上界', () => {
+  /** 跑一次展开，同时抓住实际入队的执行行 */
+  async function planAndCapture(
+    request: Parameters<SyncPlanService['plan']>[0],
+    overrides: Partial<SyncPlanDeps> = {},
+  ): Promise<{ runs: EnqueueRun[]; note: string; error: unknown }> {
+    const runs: EnqueueRun[] = [];
+    const svc = new SyncPlanService(
+      makeDeps({
+        today: () => '2026-11-05',
+        enqueue: async (rows) => {
+          runs.push(...rows);
+          return { enqueuedIds: rows.map((_, i) => i + 1), blocked: 0 };
+        },
+        ...overrides,
+      }),
+    );
+    const result = await svc.plan(request);
+    if ('error' in result) {
+      return { runs, note: '', error: result.error };
+    }
+    return { runs, note: result.plan.note, error: null };
+  }
+
+  it('交易日 19:00 前：上界停在前一交易日（不含当天）', async () => {
+    const { runs } = await planAndCapture(
+      { target: SYNC_TARGET.BAR_BY_DATE, codes: [], from: '2026-01-01' },
+      {
+        hourOfDay: () => 10,
+        tradeDayWindow: async () => ({ todayIsOpen: true, previousOpenDay: '2026-11-04' }),
+      },
+    );
+
+    expect(runs).toHaveLength(1);
+    expect(runs[0].to).toBe('2026-11-04');
+  });
+
+  it('交易日 19:00 后：上界推进到当天', async () => {
+    const { runs } = await planAndCapture(
+      { target: SYNC_TARGET.ADJUST_FACTOR, codes: [], from: '2026-01-01' },
+      {
+        hourOfDay: () => 19,
+        tradeDayWindow: async () => ({ todayIsOpen: true, previousOpenDay: '2026-11-04' }),
+      },
+    );
+
+    expect(runs[0].to).toBe('2026-11-05');
+  });
+
+  it('显式 includeToday（定时补更）：19:00 前也含当天', async () => {
+    const { runs } = await planAndCapture(
+      { target: SYNC_TARGET.BAR_BY_DATE, codes: [], from: '2026-01-01', includeToday: true },
+      {
+        hourOfDay: () => 9,
+        tradeDayWindow: async () => ({ todayIsOpen: true, previousOpenDay: '2026-11-04' }),
+      },
+    );
+
+    expect(runs[0].to).toBe('2026-11-05');
+  });
+
+  it('非交易日：上界落在最近一个交易日', async () => {
+    const { runs } = await planAndCapture(
+      { target: SYNC_TARGET.BAR_BY_DATE, codes: [], from: '2026-01-01' },
+      {
+        hourOfDay: () => 21,
+        tradeDayWindow: async () => ({ todayIsOpen: false, previousOpenDay: '2026-11-03' }),
+      },
+    );
+
+    expect(runs[0].to).toBe('2026-11-03');
+  });
+
+  it('请求的上界更早时只收窄、不越过当天可用上界', async () => {
+    const { runs } = await planAndCapture(
+      { target: SYNC_TARGET.BAR_BY_DATE, codes: [], from: '2026-01-01', to: '2026-06-30' },
+      {
+        hourOfDay: () => 21,
+        tradeDayWindow: async () => ({ todayIsOpen: true, previousOpenDay: '2026-11-04' }),
+      },
+    );
+
+    expect(runs[0].to).toBe('2026-06-30');
+  });
+
+  it('日历里没有早于今天的交易日 ⇒ 明确失败（不给一个猜出来的上界）', async () => {
+    const { error } = await planAndCapture(
+      { target: SYNC_TARGET.BAR_BY_DATE, codes: [] },
+      { tradeDayWindow: async () => ({ todayIsOpen: true, previousOpenDay: null }) },
+    );
+
+    expect(error).toEqual(
+      expect.objectContaining({ code: 'sync.calendar_not_covered' }),
+    );
+  });
+
+  it('入队回执里带上界说明（19:00 前要说清「只到前一交易日」）', async () => {
+    const { note } = await planAndCapture(
+      { target: SYNC_TARGET.BAR_BY_DATE, codes: [], from: '2026-01-01' },
+      {
+        hourOfDay: () => 10,
+        tradeDayWindow: async () => ({ todayIsOpen: true, previousOpenDay: '2026-11-04' }),
+      },
+    );
+
+    expect(note).toContain('2026-11-04');
+    expect(note).toContain('20:00');
+  });
+
+  it('起点晚于上界时回执仍说明上界（用户要知道为什么没排任务）', async () => {
+    const { runs, note } = await planAndCapture(
+      { target: SYNC_TARGET.BAR_BY_DATE, codes: [], from: '2026-12-01' },
+      {
+        hourOfDay: () => 10,
+        tradeDayWindow: async () => ({ todayIsOpen: true, previousOpenDay: '2026-11-04' }),
+      },
+    );
+
+    expect(runs).toHaveLength(0);
+    expect(note).toContain('2026-11-04');
   });
 });
 

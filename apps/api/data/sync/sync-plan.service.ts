@@ -1,5 +1,10 @@
 // 内部依赖
 import {
+  dailyUpperBoundNote,
+  resolveDailyUpperBound,
+  type TradeDayWindow,
+} from './daily-window.js';
+import {
   isCodeScoped,
   SYNC_TARGET,
   unitCodeForTradeDate,
@@ -16,6 +21,13 @@ export interface SyncRequest {
   from?: string | null;
   /** 结束日期（含）；null = 由同步器定上界 */
   to?: string | null;
+  /**
+   * 是否强制含当天（只对按交易日的数据有意义）
+   *
+   * 缺省 false：交易日 19:00 前上界停在前一交易日（当天数据源尚未发布）；
+   * 每日 20:00 的定时补更传 true，保证补上当天。
+   */
+  includeToday?: boolean;
 }
 
 /** 入队选项（source/plan 不进接口 DTO，由服务端写死） */
@@ -43,6 +55,13 @@ interface SyncUnit {
   to: string | null;
 }
 
+/** 展开结果（按交易日类型额外带上界说明） */
+interface ResolvedUnits {
+  units: SyncUnit[];
+  /** 上界说明（只有按交易日类型才有，拼进入队回执） */
+  boundNote: string | null;
+}
+
 /** 校验错误 */
 export interface SyncValidationError {
   code: string;
@@ -61,6 +80,10 @@ export interface SyncPlanDeps {
   enqueue(runs: EnqueueRun[]): Promise<{ enqueuedIds: number[]; blocked: number }>;
   /** 今天（业务时区 Asia/Shanghai） */
   today(): string;
+  /** 业务时区当前小时（0-23），用于判定是否已过当天的数据发布切点 */
+  hourOfDay(): number;
+  /** 交易日历窗口：今天是否开市 + 前一个开市日（按交易日展开时定上界用） */
+  tradeDayWindow(today: string): Promise<TradeDayWindow>;
 }
 
 /** 待入队的执行 */
@@ -133,21 +156,25 @@ export class SyncPlanService {
       return { error: validation };
     }
 
-    const units = await this.resolveUnits(request);
-    if (units === null) {
-      return { error: units as unknown as SyncValidationError };
+    const resolved = await this.resolveUnits(request);
+    if ('error' in resolved) {
+      return { error: resolved.error };
     }
+    const { units, boundNote } = resolved;
+
     if (units.length === 0) {
       return {
         plan: {
           enqueuedIds: [],
           blocked: 0,
           newTasks: 0,
-          note:
+          note: composeNote(
             request.target === SYNC_TARGET.BAR_BY_DATE ||
-            request.target === SYNC_TARGET.ADJUST_FACTOR
+              request.target === SYNC_TARGET.ADJUST_FACTOR
               ? '区间内没有可同步的日期段 —— 起点晚于今天时会出现这种情况。'
               : '没有需要同步的证券 —— 若期望有，请先同步证券基础信息。',
+            boundNote,
+          ),
         },
       };
     }
@@ -177,10 +204,12 @@ export class SyncPlanService {
 
     const outcome = await this.deps.enqueue(runs);
 
-    const note =
+    const note = composeNote(
       outcome.blocked > 0
         ? `已排 ${outcome.enqueuedIds.length} 条执行（${outcome.blocked} 条因同任务已在队列中而跳过）。`
-        : `已排 ${outcome.enqueuedIds.length} 条执行。`;
+        : `已排 ${outcome.enqueuedIds.length} 条执行。`,
+      boundNote,
+    );
 
     return {
       plan: {
@@ -192,18 +221,36 @@ export class SyncPlanService {
     };
   }
 
-  /** 把请求展开成同步单元清单；返回 null 表示校验失败 */
+  /** 把请求展开成同步单元清单；`error` 表示校验失败 */
   private async resolveUnits(
     request: SyncRequest,
-  ): Promise<SyncUnit[] | null> {
+  ): Promise<ResolvedUnits | { error: SyncValidationError }> {
     const byTradeDate =
       request.target === SYNC_TARGET.BAR_BY_DATE ||
       request.target === SYNC_TARGET.ADJUST_FACTOR;
 
     if (byTradeDate) {
       const today = this.deps.today();
-      const to =
-        request.to && request.to < today ? request.to : today;
+      const window = await this.deps.tradeDayWindow(today);
+      const bound = resolveDailyUpperBound({
+        today,
+        hour: this.deps.hourOfDay(),
+        window,
+        includeToday: request.includeToday === true,
+      });
+
+      if (bound.date === null) {
+        return {
+          error: {
+            code: 'sync.calendar_not_covered',
+            message:
+              '交易日历里没有可用的交易日（早于今天的开市日为空）—— 请先同步交易日历再重试。',
+          },
+        };
+      }
+
+      // 请求给的上界只用来「收窄」，绝不会突破当天数据的可用上界
+      const to = request.to && request.to < bound.date ? request.to : bound.date;
 
       let from: string;
       if (request.from) {
@@ -212,18 +259,25 @@ export class SyncPlanService {
         const earliest = await this.deps.earliestCalendarDate();
         if (earliest === null) {
           // 日历为空 ⇒ 无法确定起点，明确失败
-          return null;
+          return {
+            error: {
+              code: 'sync.calendar_not_covered',
+              message: '交易日历为空 —— 按交易日同步强依赖日历，请先同步交易日历再重试。',
+            },
+          };
         }
         from = earliest;
       }
 
+      const boundNote = dailyUpperBoundNote(bound, today);
       if (from > to) {
-        return [];
+        return { units: [], boundNote };
       }
 
-      return [
-        { code: unitCodeForTradeDate(request.target), from, to },
-      ];
+      return {
+        units: [{ code: unitCodeForTradeDate(request.target), from, to }],
+        boundNote,
+      };
     }
 
     // 整份快照 / 按证券
@@ -236,6 +290,18 @@ export class SyncPlanService {
       codes = await this.deps.allStockCodes();
     }
 
-    return codes.map((code) => ({ code, from: request.from ?? null, to: request.to ?? null }));
+    return {
+      units: codes.map((code) => ({
+        code,
+        from: request.from ?? null,
+        to: request.to ?? null,
+      })),
+      boundNote: null,
+    };
   }
+}
+
+/** 拼接入队回执：主说明 + 上界说明 */
+function composeNote(main: string, extra: string | null): string {
+  return extra === null ? main : `${main} ${extra}`;
 }

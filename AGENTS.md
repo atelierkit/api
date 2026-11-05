@@ -240,6 +240,15 @@
      查询串里的值全是字符串，`@IsInt()` 只认 number —— 只开 `whitelist` 时，带 `page`/`size` 的请求会**恒 400**
      （`page must be an integer number`，证券页一打开就红，2026-11-05 实测）。刻意**不开** `enableImplicitConversion`：
      `Boolean('false') === true`，会把所有 `@IsBoolean()` 开关字段静默改成开启。`app.pipe.spec.ts` 钉住了这条口径。
+  13. **按交易日数据的「当天」有发布切点**（2026-11-05）：上界由 `data/sync/daily-window.ts` 决定 ——
+     交易日 **19:00 前**的手动同步只到**前一交易日**（数据源此时还没发布当天数据，硬取只会让进度区多一段空转），
+     19:00 起含当天；非交易日一律落在最近一个开市日。
+     当天由**每日 20:00 的定时补更**收口（`data/sync/daily-catch-up.ts` + `SyncService.startDailyCatchUp`）：
+     进程内 5 分钟巡检，命中「交易日 + 已过 20:00 + 今天还没排过」就入队，请求带 `includeToday: true`。
+     ⚠ 幂等靠 `sync_runs.plan_date = 'auto:daily:<today>'`（应用层 `findOneBy` 查重 + `IDX_sync_runs_plan` 兜底）——
+     这个值**不能改成空串**：空串是手工执行的标记，不受该唯一索引约束。
+     ⚠ 用巡检而不是 `setTimeout(20:00)`：20:00 那一刻进程恰好重启，一次性定时器就永久错过当天。
+     手动同步与补更的边界要分开测（`sync-plan.service.spec.ts` 的「按交易日的同步上界」一组）。
 - **`@shared` 路径别名**：根 `tsconfig.json` 的 `paths` 声明 `@shared` → `apps/api/shared/index.ts`、`@shared/*` → `apps/api/shared/*`。
   `shared/` **之外**的代码（`app.module.ts` 等）用 `import { SharedModule } from '@shared'` 或 `@shared/<目录>/<文件>.js`；
   `shared/` **内部**仍用相对路径（保持目录可整体搬迁，也不引入循环依赖风险）。

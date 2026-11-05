@@ -42,7 +42,8 @@ RUN yarn install --frozen-lockfile --production=true --network-timeout 600000 \
 # 只拷编译产物，源码与文档不进镜像
 COPY --from=builder /app/dist ./dist
 
-# 端口由 .env 的 PORT 决定，默认 3000
-EXPOSE 3000
+# 端口由 .env 的 PORT 决定，默认 80
+# 注：容器内默认以 root 运行，绑 80 不需要额外授权；若日后加了 USER 降权，需 cap_add NET_BIND_SERVICE
+EXPOSE 80
 
 CMD ["node", "dist/apps/api/main.js"]

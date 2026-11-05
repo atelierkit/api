@@ -32,7 +32,8 @@ async function bootstrap() {
       res.setHeader('X-Content-Type-Options', 'nosniff');
     },
   });
-  // 启动监听
-  await app.listen(process.env.PORT ?? 3000);
+  // 启动监听（默认 80；80 属特权端口，非 root 直接运行时需 CAP_NET_BIND_SERVICE，
+  // 或改用 PORT 覆盖成 1024 以上的端口）
+  await app.listen(process.env.PORT ?? 80);
 }
 await bootstrap();

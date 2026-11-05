@@ -6,7 +6,7 @@
 
 | 项目 | 类型 | 说明 |
 | --- | --- | --- |
-| `apps/api` | application | HTTP 接口服务，监听端口（默认 3000）；`apps/api/shared/` 为共用领域模块 |
+| `apps/api` | application | HTTP 接口服务，监听端口（默认 80，由 `PORT` 覆盖）；`apps/api/shared/` 为共用领域模块 |
 | `apps/worker` | application | 后台常驻服务，**不监听端口**，用于定时任务 / 队列消费 / 长时异步任务 |
 | `libs/` | library | 可复用库（`nest g library <name>`），当前为空 |
 

@@ -18,7 +18,7 @@
 #   CONTAINER      容器名（默认 atelierkit-api）
 #   NETWORK        自定义网络名（默认 atelierkit-net；置空则用默认 bridge）
 #   IP             固定 IPv4（默认空 = 不固定；反代按 IP 转发时才需要）
-#   PORT           容器内监听端口（默认 3000；反代按 IP:PORT 转发时两边必须一致）
+#   PORT           容器内监听端口（默认 80；反代按 IP:PORT 转发时两边必须一致）
 #   PUBLISH        宿主机端口映射（默认空 = 不映射；给值则 -p PUBLISH:PORT）
 #   DEPENDS        启动前顺带检查是否在跑的依赖容器（空格分隔，仅告警不阻断）
 #   ENV_FILE       运行时配置（默认 ./.env，建议 chmod 600）
@@ -50,7 +50,7 @@ IMAGE_REPO="${IMAGE_REPO:-ghcr.io/atelierkit/api}"
 CONTAINER="${CONTAINER:-atelierkit-api}"
 NETWORK="${NETWORK:-atelierkit-net}"
 IP="${IP:-}"
-PORT="${PORT:-3000}"
+PORT="${PORT:-80}"
 PUBLISH="${PUBLISH-}"
 DEPENDS="${DEPENDS:-}"
 ENV_FILE="${ENV_FILE:-.env}"

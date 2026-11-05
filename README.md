@@ -210,7 +210,7 @@ yarn docker:build:api
 
 ```bash
 docker run -d --name atelierkit-api --restart always \
-  -p 3000:3000 \
+  -p 80:80 \
   --env-file .env \
   -e TZ=Asia/Shanghai \
   atelierkit/api:local
@@ -228,7 +228,8 @@ docker run -d --name atelierkit-api --restart always \
    Linux 上还需：PG `listen_addresses='*'` + `pg_hba.conf` 放行 docker 网段；Redis `bind 0.0.0.0` + `requirepass`。
    若宿主机中间件本身也是容器，直接用 §3 的同网络方案更省事。
 
-2. **端口两侧必须一致。** 容器内监听 `PORT`（默认 3000），`-p 3000:3000` 与之对齐；改成 `-e PORT=8080` 时映射要跟着改。
+2. **端口两侧必须一致。** 容器内监听 `PORT`（默认 80），`-p 80:80` 与之对齐；改成 `-e PORT=8080` 时映射要跟着改。
+   宿主机 80 常被 nginx / IIS 占用，若已被占用就换映射：`-p 8080:80`（只改左侧宿主机端口，容器内仍是 80）。
 
 3. **`--env-file` 不做去转义处理。** 文件里带 `\r`（Windows 下编辑过）会把回车读进变量值，口令从此永远对不上。
    启动前先自查：`grep -c $'\r' .env` 应为 `0`（非 0 就先 `sed -i 's/\r$//' .env`，否则口令里会混入回车）。
@@ -246,14 +247,14 @@ docker run -d --name atelierkit-api --restart always \
 服务**没有** `/health` 端点（根路径返回 404）。用 `GET /passport/init` 代替：它是公开接口，且会真的查一次库：
 
 ```bash
-docker exec atelierkit-api wget -qO- http://127.0.0.1:3000/passport/init
+docker exec atelierkit-api wget -qO- http://127.0.0.1:80/passport/init
 # {"initialized":false}
 ```
 
 镜像本身没有 `HEALTHCHECK`，需要时在 `docker run` 上补：
 
 ```bash
-  --health-cmd 'wget -qO- http://127.0.0.1:3000/passport/init >/dev/null || exit 1' \
+  --health-cmd 'wget -qO- http://127.0.0.1:80/passport/init >/dev/null || exit 1' \
   --health-interval 30s --health-timeout 3s --health-retries 3
 ```
 
@@ -298,7 +299,7 @@ REDIS_PSW=与上面 requirepass 一致
 
 ```bash
 docker run -d --name atelierkit-api --network atelierkit --restart always \
-  -p 3000:3000 --env-file .env -e TZ=Asia/Shanghai atelierkit/api:local
+  -p 80:80 --env-file .env -e TZ=Asia/Shanghai atelierkit/api:local
 
 # 需要 worker 时（镜像须含 dist/apps/worker，见 §2.2 第 4 点）
 docker run -d --name atelierkit-worker --network atelierkit --restart always \
@@ -376,12 +377,12 @@ services:
       NODE_ENV: production
       TZ: Asia/Shanghai
     ports:
-      - '3000:3000'
+      - '80:80'
     depends_on:
       postgres: { condition: service_healthy }
       redis: { condition: service_healthy }
     healthcheck:
-      test: ['CMD-SHELL', 'wget -qO- http://127.0.0.1:3000/passport/init >/dev/null || exit 1']
+      test: ['CMD-SHELL', 'wget -qO- http://127.0.0.1:80/passport/init >/dev/null || exit 1']
       interval: 30s
       timeout: 3s
       retries: 3
@@ -469,7 +470,7 @@ metadata:
   namespace: atelierkit
 data:
   NODE_ENV: production      # ⚠️ 不要用 dev/demo：那会让 synchronize 在生产库上改表
-  PORT: '3000'
+  PORT: '80'
   TZ: Asia/Shanghai
   ALLOW_SIGNUP: 'false'
 ```
@@ -496,12 +497,16 @@ spec:
       securityContext:
         runAsNonRoot: true
         runAsUser: 1000
+        # 默认端口 80 属特权端口（<1024）：非 root 进程必须显式获得绑定能力，
+        # 否则启动即 EACCES（listen EACCES: permission denied 0.0.0.0:80）
+        capabilities:
+          add: [NET_BIND_SERVICE]
       containers:
         - name: api
           image: ghcr.io/atelierkit/api:latest
           imagePullPolicy: IfNotPresent
           ports:
-            - { name: http, containerPort: 3000 }
+            - { name: http, containerPort: 80 }
           envFrom:
             - secretRef: { name: atelierkit-api }
             - configMapRef: { name: atelierkit-api-config }
@@ -526,6 +531,8 @@ spec:
 
 > 镜像默认以 root 运行（Dockerfile 没有 `USER`），上面用 `runAsUser: 1000` 收窄权限；
 > 容器只读 `dist` 与 `node_modules`，不需要写盘。若日后镜像自建用户，把 UID 改成与之一致即可。
+> ⚠️ 降权后绑 80 依赖上面那行 `NET_BIND_SERVICE`，删掉它服务会直接起不来；
+> 不想给能力的话，把 ConfigMap 的 `PORT` 改回 `3000` 并让 Service 的 `targetPort` 指向 3000。
 
 #### 5.3 Service 与 Ingress
 
@@ -538,7 +545,7 @@ metadata:
 spec:
   selector: { app: atelierkit-api }
   ports:
-    - { name: http, port: 3000, targetPort: http }
+    - { name: http, port: 80, targetPort: http }
 ---
 apiVersion: networking.k8s.io/v1
 kind: Ingress
@@ -618,7 +625,7 @@ spec:
 验证表结构就绪：
 
 ```bash
-kubectl -n atelierkit exec deploy/api -- wget -qO- http://127.0.0.1:3000/passport/init
+kubectl -n atelierkit exec deploy/api -- wget -qO- http://127.0.0.1:80/passport/init
 # {"initialized":false}
 ```
 
@@ -632,7 +639,7 @@ kubectl -n atelierkit exec deploy/api -- wget -qO- http://127.0.0.1:3000/passpor
 | 变量 | 必填 | 默认 | 说明 |
 | --- | --- | --- | --- |
 | `NODE_ENV` | 建议 | 无（镜像内置 `production`） | 只认 `dev` / `demo` / `production`。**仅 `dev`、`demo` 会同步表结构**；`production` 下不建表也不改表 |
-| `PORT` | 否 | `3000` | HTTP 监听端口；容器里改它要同步改 `-p` 映射 |
+| `PORT` | 否 | `80` | HTTP 监听端口；容器里改它要同步改 `-p` 映射。80 是特权端口，非 root 运行时需 `NET_BIND_SERVICE` 或改成 1024 以上 |
 | `APP_PROFILE` | 否 | 空 | 非空时额外加载 `.env.$APP_PROFILE`（同机多环境用）；留空只读 `.env` |
 | `UPLOAD_DIR` | 否 | `data/uploads` | 运行时上传目录（当前用于用户头像），相对路径按**启动工作目录**解析。容器部署必须指向挂载卷，见 §6.6 |
 
@@ -721,7 +728,7 @@ kubectl -n atelierkit exec deploy/api -- wget -qO- http://127.0.0.1:3000/passpor
 **② 直接调接口**：
 
 ```bash
-curl -X POST http://localhost:3000/passport/setup \
+curl -X POST http://localhost:80/passport/setup \
   -H 'content-type: application/json' \
   -H 'X-Setup-Token: <若配置了 SETUP_TOKEN 则必填>' \
   -d '{"username":"admin","password":"admin12345","email":"you@example.com"}'

@@ -55,13 +55,15 @@ export const KUBERNETES_SECRET_MASK = '***';
 export const KUBERNETES_DEFAULT_NAMESPACE = 'default';
 
 /**
- * 对外可见的字段
+ * 主表与日志表共用的可见字段
  *
  * 注 1：**仍然带上 `token` / `key`** —— 服务端要靠它们判断「是否已配置」（回 `hasToken` / `hasKey`），
  * 但 `view()` 会把值清成空串，任何接口都不会把凭据或其密文下发浏览器
  * 注 2：TypeORM v1 起只认对象写法，嵌入列要展开成嵌套对象
+ * 注 3：**这里刻意不含 `create`** —— 日志表没有这一列（历史行是整行拷贝，创建信息已并入 `update`），
+ * 把它一起 select 会让日志查询抛 `EntityPropertyNotFoundError`
  */
-const ROW_SELECT = {
+const BASE_SELECT: Omit<FindOptionsSelect<KubernetesEntity>, 'create'> = {
   id: true,
   name: true,
   description: true,
@@ -73,7 +75,6 @@ const ROW_SELECT = {
   verify: true,
   namespace: true,
   status: true,
-  create: { userId: true, at: true },
   update: {
     userId: true,
     operate: true,
@@ -81,7 +82,17 @@ const ROW_SELECT = {
     reqId: true,
     at: true,
   },
+};
+
+/** 主表可见字段，注：比日志表多一个 `create` */
+const ROW_SELECT = {
+  ...BASE_SELECT,
+  create: { userId: true, at: true },
 } satisfies FindOptionsSelect<KubernetesEntity>;
+
+/** 日志表可见字段，注：`satisfies` 会挡住「照抄主表的 `create`」这类写法 */
+const LOG_SELECT =
+  BASE_SELECT satisfies FindOptionsSelect<KubernetesLogEntity>;
 
 /** 视图，注：`hasToken` / `hasKey` 是派生字段，只告诉前端「凭据已配置」，不给凭据本身 */
 type KubernetesView<T extends KubernetesBaseEntity> = T & {
@@ -158,7 +169,7 @@ export class KubernetesService extends CommonService<
   async log(id: number) {
     /** 变更记录 */
     const rows = await this.kubernetesLogRepository.find({
-      select: ROW_SELECT,
+      select: LOG_SELECT,
       where: { id } as FindOptionsWhere<KubernetesLogEntity>,
     });
     return rows.map((row) => this.view(row));

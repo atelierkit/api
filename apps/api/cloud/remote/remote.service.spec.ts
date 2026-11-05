@@ -10,6 +10,7 @@ import { Repository } from 'typeorm';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 // 内部依赖
 import { decryptSecret, encryptSecret } from '../../shared/common/secret.util.js';
+import { missingSelectPathsOf } from '../../shared/common/select.fixture.js';
 import { OperateService } from '../../shared/operate/operate.service.js';
 import { QueueService } from '../../shared/queue/queue.service.js';
 import { fingerprintOf } from './remote.key.js';
@@ -119,6 +120,7 @@ function serviceOf(row: unknown = ROW) {
       logRepository as unknown as Repository<RemoteLogEntity>,
     ),
     repository,
+    logRepository,
     sshSrv,
   };
 }
@@ -186,6 +188,29 @@ describe('RemoteService 查询', () => {
     /** 被测服务 */
     const { service } = serviceOf(null);
     expect(await service.show(9)).toBeNull();
+  });
+});
+
+// 注：`find` 的替身不核对 `select`，属性名写错时单测照样绿、真机才抛
+// `EntityPropertyNotFoundError`（Docker 模块的变更历史就这么红过一次），故这里按实体元数据反过来校验
+describe('RemoteService 可见列', () => {
+  it('主表查询的字段都在主表实体上', async () => {
+    /** 被测服务 */
+    const { service, repository } = serviceOf();
+    await service.show(1);
+    /** 查询选项 */
+    const options = argOf(repository.findOne) as { select?: unknown };
+    expect(missingSelectPathsOf(options.select, RemoteEntity)).toEqual([]);
+  });
+
+  it('变更历史只取日志表上存在的列（日志表没有 create）', async () => {
+    /** 被测服务 */
+    const { service, logRepository } = serviceOf();
+    await service.log(1);
+    /** 查询选项 */
+    const options = argOf(logRepository.find) as { select?: unknown };
+    expect(missingSelectPathsOf(options.select, RemoteLogEntity)).toEqual([]);
+    expect(options.select).not.toHaveProperty('create');
   });
 });
 

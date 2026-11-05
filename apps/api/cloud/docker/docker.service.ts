@@ -48,13 +48,15 @@ export const DOCKER_KEY_MASK = '***';
 export const DOCKER_VERSION_TTL = 5 * 60 * 1000;
 
 /**
- * 对外可见的字段
+ * 主表与日志表共用的可见字段
  *
  * 注 1：**仍然带上 `key`** —— 服务端要靠它判断「是否已配置私钥」（回 `hasKey`），
  * 但 `view()` 会把它的值清成空串，任何接口都不会把私钥或其密文下发浏览器
  * 注 2：TypeORM v1 起只认对象写法，嵌入列要展开成嵌套对象
+ * 注 3：**这里刻意不含 `create`** —— 日志表没有这一列（历史行是整行拷贝，创建信息已并入 `update`），
+ * 把它一起 select 会让日志查询抛 `EntityPropertyNotFoundError`
  */
-const ROW_SELECT = {
+const BASE_SELECT: Omit<FindOptionsSelect<DockerEntity>, 'create'> = {
   id: true,
   name: true,
   description: true,
@@ -66,7 +68,6 @@ const ROW_SELECT = {
   verify: true,
   apiVersion: true,
   status: true,
-  create: { userId: true, at: true },
   update: {
     userId: true,
     operate: true,
@@ -74,7 +75,16 @@ const ROW_SELECT = {
     reqId: true,
     at: true,
   },
+};
+
+/** 主表可见字段，注：比日志表多一个 `create` */
+const ROW_SELECT = {
+  ...BASE_SELECT,
+  create: { userId: true, at: true },
 } satisfies FindOptionsSelect<DockerEntity>;
+
+/** 日志表可见字段，注：`satisfies` 会挡住「照抄主表的 `create`」这类写法 */
+const LOG_SELECT = BASE_SELECT satisfies FindOptionsSelect<DockerLogEntity>;
 
 /** 视图，注：`hasKey` 是派生字段，只告诉前端「私钥已配置」，不给私钥本身 */
 type DockerView<T extends DockerBaseEntity> = T & { hasKey: boolean };
@@ -153,7 +163,7 @@ export class DockerService extends CommonService<DockerEntity, DockerLogEntity> 
   async log(id: number) {
     /** 变更记录 */
     const rows = await this.dockerLogRepository.find({
-      select: ROW_SELECT,
+      select: LOG_SELECT,
       where: { id } as FindOptionsWhere<DockerLogEntity>,
     });
     return rows.map((row) => this.view(row));

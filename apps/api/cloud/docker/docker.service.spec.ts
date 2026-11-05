@@ -8,6 +8,7 @@ import { Repository } from 'typeorm';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 // 内部依赖
 import { encryptSecret } from '../../shared/common/secret.util.js';
+import { missingSelectPathsOf } from '../../shared/common/select.fixture.js';
 import { OperateService } from '../../shared/operate/operate.service.js';
 import { QueueService } from '../../shared/queue/queue.service.js';
 import { CLIENT_CERT, CLIENT_KEY, OTHER_CERT, OTHER_KEY } from './docker.cert.fixture.js';
@@ -129,6 +130,29 @@ describe('DockerService 查询', () => {
     /** 被测服务 */
     const { service } = serviceOf(null);
     expect(await service.show(9)).toBeNull();
+  });
+});
+
+// 注：`find` 的替身不核对 `select`，属性名写错时单测照样绿、真机才抛
+// `EntityPropertyNotFoundError`（2026-11-05 变更历史接口就这么红过一次），故这里按实体元数据反过来校验
+describe('DockerService 可见列', () => {
+  it('主表查询的字段都在主表实体上', async () => {
+    /** 被测服务 */
+    const { service, repository } = serviceOf();
+    await service.show(1);
+    /** 查询选项 */
+    const options = argsOf(repository.findOne)[0] as { select?: unknown };
+    expect(missingSelectPathsOf(options.select, DockerEntity)).toEqual([]);
+  });
+
+  it('变更历史只取日志表上存在的列（日志表没有 create）', async () => {
+    /** 被测服务 */
+    const { service, logRepository } = serviceOf();
+    await service.log(1);
+    /** 查询选项 */
+    const options = argsOf(logRepository.find)[0] as { select?: unknown };
+    expect(missingSelectPathsOf(options.select, DockerLogEntity)).toEqual([]);
+    expect(options.select).not.toHaveProperty('create');
   });
 });
 

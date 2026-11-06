@@ -13,6 +13,7 @@ import {
   TokenGuard,
 } from '@shared';
 import { AdminModule } from './admin/admin.module.js';
+import { AliyunModule } from './aliyun/aliyun.module.js';
 import { AuthModule } from './auth/auth.module.js';
 import { CloudModule } from './cloud/cloud.module.js';
 import { DataModule } from './data/data.module.js';
@@ -83,6 +84,7 @@ import { VALIDATION_PIPE_OPTIONS } from './validation.options.js';
     AuthModule,
     CloudModule,
     TencentModule,
+    AliyunModule,
     AdminModule,
     DataModule,
   ],

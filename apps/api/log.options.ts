@@ -13,10 +13,14 @@ const ALL_LOG_LEVELS: readonly LogLevel[] = [
 
 /** 默认日志级别
  *
- * 只保留异常（error）与告警（warn）：请求级追踪、连接池心跳这类 info/debug 输出
- * 在容器里会把真正的故障埋掉（实测一个页面请求就要刷 10 行 DEBUG）。
+ * 保留异常（error）、告警（warn）与常规信息（log），仍关闭 debug / verbose：
+ * - 放行 `log` 是为了让启动过程可见 —— 框架的 "Starting Nest application"、
+ *   "Mapped {path, METHOD} route"、"Nest application successfully started"
+ *   都是 `log` 级别，压掉后启动中的终端一片空白，极易被误判成进程卡死；
+ * - 继续关闭 `debug` / `verbose`：请求级追踪、连接池心跳这类输出会在容器里
+ *   把真正的故障埋掉（实测一个页面请求就要刷 10 行 DEBUG）。
  */
-export const DEFAULT_LOG_LEVELS: readonly LogLevel[] = ['error', 'warn'];
+export const DEFAULT_LOG_LEVELS: readonly LogLevel[] = ['error', 'warn', 'log'];
 
 /**
  * 解析日志级别

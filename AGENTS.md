@@ -262,20 +262,25 @@
   （典型触发：给 `apps/worker` 加一条 `@shared` 导入去「试一下」，会连带把 `apps/api/shared` 整棵树的三种产物吐回源码目录）。
   这些是构建垃圾，`git status` 核对后直接删；提交前务必扫一眼（本项目 `declaration: true` + `composite: true`，产物正常只落在 `dist/apps/<project>/`）。
 
-## 日志口径（只输出异常与告警）
+## 日志口径（默认输出启动信息与异常，压制请求级追踪）
 
-- 两个入口的日志级别都由 `apps/api/log.options.ts` 的 `resolveLogLevels()` 决定：默认 `['error', 'warn']`，
+- 两个入口的日志级别都由 `apps/api/log.options.ts` 的 `resolveLogLevels()` 决定：默认 `['error', 'warn', 'log']`，
   环境变量 `LOG_LEVEL`（逗号分隔，或 `all`）可临时放开。**不要在入口硬编码级别数组**
-  （例外：`apps/worker` 不能 `@shared`，只能写字面量 `['error', 'warn']`，改口径时两处一起对）。
+  （例外：`apps/worker` 不能 `@shared`，只能写字面量 `['error', 'warn', 'log']`，改口径时两处一起对）。
+- **默认放行 `log` 的目的**：框架的 `Starting Nest application`、`Mapped {path, METHOD} route`、
+  `Nest application successfully started` 全是 `log` 级别。压掉它们后，启动中的终端只剩编译那一行、
+  之后一片空白，会被误判成进程卡死（2026-11-06 实测踩过这个坑）。`debug` / `verbose` 仍默认关闭。
+  `apps/api/main.ts` 在 `listen` 之后另补一行 `服务已就绪：http://localhost:<port>`，因为框架不打印端口。
 - ⚠️ **请求路径上不许打 debug**：`TokenGuard` / `ReqInterceptor` 在请求路径上打 debug 会每个请求刷出十行
   `DEBUG clientIp / url / reqId`（`Logger.debug('a', b)` 是**每个参数一行**），容器日志里真正的故障会被淹掉。
   排障需要这些值时临时在本地加断点或 `LOG_LEVEL`，别提交回仓库。
-- **正常事件不输出**：连接建立 / 空闲回收 / 启动成功 / 缓存初始化 这类「预期内」的事件一律不打日志；
-  值得留痕的只有异常链路 —— 异常、异常后重连、探活自愈。
-- **恢复类日志用 `warn` 而不是 `log`**：默认级别下 `log` 不输出，只留「探活失败」而没有「已恢复正常」，
-  会把已自愈的故障误判成持续故障（`DbMonitorService` 的探活恢复即按此口径）。
-- `logger.log` 仍保留在状态变更处（自动建角色、系统初始化完成、同步入队等），默认级别下不输出，
-  排查时 `LOG_LEVEL=log` 恢复；真正需要「一直被看到」的异常请用 `error` / `warn`。
+- ⚠️ **请求路径上同样不许打 `log`**：默认级别已放行 `log`，请求级的 `logger.log` 会变成每个请求刷一行。
+  允许出现 `log` 的位置只有状态变更（启动摘要、自动建角色、系统初始化完成、同步入队等），
+  新增前先确认调用频次；连接建立 / 空闲回收 / 缓存命中这类「预期内」的事件仍不打日志。
+- **恢复类日志用 `warn` 而不是 `log`**：现场常把 `LOG_LEVEL` 收窄成 `error`，`log` 会被滤掉，
+  只剩「探活失败」而没有「已恢复正常」，会把已自愈的故障误判成持续故障（`DbMonitorService` 的探活恢复即按此口径）。
+- `logger.log` 在状态变更处保留，默认可见；要看更细的装载过程用 `LOG_LEVEL=debug` 临时放开，
+  真正需要「一直被看到」的异常请用 `error` / `warn`。
 
 ## 提交门禁（pre-commit）
 

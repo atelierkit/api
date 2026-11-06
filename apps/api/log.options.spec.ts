@@ -4,14 +4,16 @@ import { describe, expect, it } from 'vitest';
 import { DEFAULT_LOG_LEVELS, resolveLogLevels } from './log.options.js';
 
 describe('日志级别配置', () => {
-  it('默认只输出异常与告警', () => {
-    expect(resolveLogLevels(undefined)).toEqual(['error', 'warn']);
-    expect(DEFAULT_LOG_LEVELS).toEqual(['error', 'warn']);
+  it('默认输出异常、告警与常规信息（启动/路由日志可见），关闭 debug', () => {
+    expect(resolveLogLevels(undefined)).toEqual(['error', 'warn', 'log']);
+    expect(DEFAULT_LOG_LEVELS).toEqual(['error', 'warn', 'log']);
+    expect(DEFAULT_LOG_LEVELS).not.toContain('debug');
+    expect(DEFAULT_LOG_LEVELS).not.toContain('verbose');
   });
 
   it('空串与纯空白回落到默认值', () => {
-    expect(resolveLogLevels('')).toEqual(['error', 'warn']);
-    expect(resolveLogLevels('   ')).toEqual(['error', 'warn']);
+    expect(resolveLogLevels('')).toEqual(['error', 'warn', 'log']);
+    expect(resolveLogLevels('   ')).toEqual(['error', 'warn', 'log']);
   });
 
   it('按逗号解析，容忍大小写与空格', () => {
@@ -32,6 +34,6 @@ describe('日志级别配置', () => {
 
   it('无法识别的级别被忽略，全都不识别时回落默认值', () => {
     expect(resolveLogLevels('debug,trace')).toEqual(['debug']);
-    expect(resolveLogLevels('trace')).toEqual(['error', 'warn']);
+    expect(resolveLogLevels('trace')).toEqual(['error', 'warn', 'log']);
   });
 });

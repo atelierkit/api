@@ -1,4 +1,5 @@
 // 外部依赖
+import { Logger } from '@nestjs/common';
 import { NestFactory } from '@nestjs/core';
 import type { NestExpressApplication } from '@nestjs/platform-express';
 // 内部依赖
@@ -39,6 +40,11 @@ async function bootstrap() {
   });
   // 启动监听（默认 80；80 属特权端口，非 root 直接运行时需 CAP_NET_BIND_SERVICE，
   // 或改用 PORT 覆盖成 1024 以上的端口）
-  await app.listen(process.env.PORT ?? 80);
+  /** 监听端口 */
+  const port = process.env.PORT ?? 80;
+  await app.listen(port);
+  // 框架的 "Nest application successfully started" 不含监听地址，这里补一行摘要，
+  // 否则本地起服务时无法从日志判断端口是否真的生效
+  Logger.log(`服务已就绪：http://localhost:${port}`, 'Bootstrap');
 }
 await bootstrap();
